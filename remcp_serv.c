@@ -11,6 +11,12 @@
 #define CHUNK_SIZE 128
 #define TRANSFER_RATE 256 // bytes por segundo
 
+
+// TODO .txt esta sendo criado junto como .part
+// TODO ao encerrar durante a transferencia e iniciar de novo, pare que está começando do zero
+// TODO mudar o carregamento para bytes/segundos para saber quantos bytes ja foram transferidos do arquivo
+// TODO ao encerrar o cliente com ctrl+c, o server ta encerrando também, resolver isso 
+
 typedef struct {
     int client_socket;
     char *file_name;
@@ -19,7 +25,7 @@ typedef struct {
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; // Prevenir condições de corrida
 int active_connections = 0;
 
-// Função para gerenciar transferência com feedback
+// Função para enviar arquivo com progresso e .part
 void send_file(int client_socket, const char *file_name) {
     FILE *file = fopen(file_name, "rb");
     if (!file) {
@@ -32,15 +38,30 @@ void send_file(int client_socket, const char *file_name) {
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
+    send(client_socket, &file_size, sizeof(file_size), 0);
+
     char buffer[CHUNK_SIZE];
     size_t bytes_read;
     long bytes_sent = 0;
+    char part_file_name[256];
+    snprintf(part_file_name, sizeof(part_file_name), "%s.part", file_name);
+
+    FILE *part_file = fopen(part_file_name, "wb");
+    if (!part_file) {
+        perror("Erro ao criar arquivo .part");
+        fclose(file);
+        close(client_socket);
+        return;
+    }
 
     while ((bytes_read = fread(buffer, 1, CHUNK_SIZE, file)) > 0) {
         if (send(client_socket, buffer, bytes_read, 0) == -1) {
             perror("Erro na transferência");
             break;
         }
+
+        fwrite(buffer, 1, bytes_read, part_file);
+        fflush(part_file); // Garantir escrita no disco
         bytes_sent += bytes_read;
         int percent = (int)((bytes_sent * 100) / file_size);
         printf("Enviando '%s': %d%% concluído\n", file_name, percent);
@@ -48,9 +69,17 @@ void send_file(int client_socket, const char *file_name) {
         usleep(1000000 * CHUNK_SIZE / TRANSFER_RATE); // Throttling
     }
 
+    fclose(part_file);
     fclose(file);
+
+    if (bytes_sent == file_size) {
+        rename(part_file_name, file_name); // Renomear para o nome final
+        printf("Transferência de '%s' concluída.\n", file_name);
+    } else {
+        printf("Transferência de '%s' interrompida.\n", file_name);
+    }
+
     close(client_socket);
-    printf("Transferência de '%s' concluída.\n", file_name);
 }
 
 // Função para cada cliente
@@ -135,3 +164,4 @@ int main() {
     start_server();
     return 0;
 }
+
