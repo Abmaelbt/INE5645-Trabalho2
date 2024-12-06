@@ -4,11 +4,13 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <arpa/inet.h>
-#include <errno.h>
+#include <fcntl.h>
+#include <sys/time.h>
 
 #define PORT 8080
 #define MAX_CONNECTIONS 5
 #define CHUNK_SIZE 128
+#define TRANSFER_RATE 256
 
 typedef struct {
     int client_socket;
@@ -17,14 +19,20 @@ typedef struct {
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 int active_connections = 0;
 
-void send_file(int client_socket, const char *remote_path) {
+long current_time_ms() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+void send_file(int client_socket, const char *remote_path, int client_transfer_rate) {
     char buffer[CHUNK_SIZE];
     size_t bytes_received;
     long total_received = 0;
 
     char *file_name = strrchr(remote_path, '/');
-    if (!file_name) file_name = (char *)remote_path; // Nome do arquivo sem path
-    else file_name++; // Ignora a barra final
+    if (!file_name) file_name = (char *)remote_path;
+    else file_name++;
 
     char part_file_name[256];
     snprintf(part_file_name, sizeof(part_file_name), "%s.part", remote_path);
@@ -46,14 +54,25 @@ void send_file(int client_socket, const char *remote_path) {
 
     long file_size;
     recv(client_socket, &file_size, sizeof(file_size), 0);
+    long last_time = current_time_ms();
 
     while ((bytes_received = recv(client_socket, buffer, CHUNK_SIZE, 0)) > 0) {
         fwrite(buffer, 1, bytes_received, part_file);
         fwrite(buffer, 1, bytes_received, file);
+        fflush(part_file);
+
         total_received += bytes_received;
+        printf("Recebendo '%s': %ld bytes recebidos de %ld\n", file_name, total_received, file_size);
 
         int percent = (int)((total_received * 100) / file_size);
-        printf("Recebendo '%s': %d%% concluído\n", file_name, percent);
+        printf("Progresso: %d%% concluído\n", percent);
+
+        long current_time = current_time_ms();
+        long elapsed_time = current_time - last_time;
+        long sleep_time = (1000 * bytes_received / client_transfer_rate) - elapsed_time;
+
+        if (sleep_time > 0) usleep(sleep_time * 1000);
+        last_time = current_time;
 
         if (total_received >= file_size) break;
     }
@@ -76,11 +95,12 @@ void *client_handler(void *arg) {
 
     pthread_mutex_lock(&mutex);
     active_connections++;
+    int client_transfer_rate = TRANSFER_RATE / active_connections;
     pthread_mutex_unlock(&mutex);
 
     char remote_path[256];
     recv(request->client_socket, remote_path, sizeof(remote_path), 0);
-    send_file(request->client_socket, remote_path);
+    send_file(request->client_socket, remote_path, client_transfer_rate);
 
     pthread_mutex_lock(&mutex);
     active_connections--;
@@ -146,6 +166,22 @@ void start_server() {
 }
 
 int main() {
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("Erro ao criar daemon");
+        exit(EXIT_FAILURE);
+    } else if (pid > 0) {
+        printf("Servidor iniciado em background (PID: %d).\n", pid);
+        exit(EXIT_SUCCESS);
+    }
+
+    setsid();
+    chdir("/");
+    fclose(stdout);
+    fclose(stderr);
+    fclose(stdin);
+
     start_server();
     return 0;
 }

@@ -3,9 +3,12 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <errno.h>
 
 #define PORT 8080
 #define CHUNK_SIZE 128
+#define RETRY_LIMIT 5 // numero de tentativas pare reconexão
+#define RETRY_DELAY 2
 
 void upload_file(int socket, const char *file_path, const char *remote_path) {
     FILE *file = fopen(file_path, "rb");
@@ -31,12 +34,39 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
         send(socket, buffer, bytes_read, 0);
         bytes_sent += bytes_read;
 
+        printf("Enviando '%s': %ld bytes enviados de %ld\n", file_path, bytes_sent, file_size);
+
         int percent = (int)((bytes_sent * 100) / file_size);
-        printf("Enviando '%s': %d%% concluído\n", file_path, percent);
+        printf("Progresso: %d%% concluído\n", percent);
     }
 
     fclose(file);
     printf("Envio de '%s' concluído.\n", file_path);
+}
+
+int connect_to_server(const char *ip) {
+    int client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket == -1) {
+        perror("Erro ao criar socket");
+        return -1;
+    }
+
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+
+    if (inet_pton(AF_INET, ip, &server_addr.sin_addr) <= 0) {
+        perror("Endereço IP inválido");
+        return -1;
+    }
+
+    if (connect(client_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
+        perror("Erro ao conectar ao servidor");
+        close(client_socket);
+        return -1;
+    }
+
+    return client_socket;
 }
 
 int main(int argc, char *argv[]) {
@@ -54,32 +84,27 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    *colon = '\0'; // Separa o IP do caminho remoto
+    *colon = '\0'; // separa o ip do caminho remoto
     char *ip = remote_path;
     char *path = colon + 1;
 
-    int client_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (client_socket == -1) {
-        perror("Erro ao criar socket");
-        exit(EXIT_FAILURE);
+    int attempt = 0;
+    while (attempt < RETRY_LIMIT) {
+        int client_socket = connect_to_server(ip);
+        if (client_socket != -1) {
+            upload_file(client_socket, file_path, path);
+            close(client_socket);
+            break;
+        }
+
+        attempt++;
+        if (attempt < RETRY_LIMIT) {
+            printf("Tentativa de reconexão (%d/%d)...\n", attempt, RETRY_LIMIT);
+            sleep(RETRY_DELAY);
+        } else {
+            fprintf(stderr, "Falha ao conectar ao servidor após %d tentativas.\n", RETRY_LIMIT);
+        }
     }
-
-    struct sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-
-    if (inet_pton(AF_INET, ip, &server_addr.sin_addr) <= 0) {
-        perror("Endereço IP inválido");
-        exit(EXIT_FAILURE);
-    }
-
-    if (connect(client_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
-        perror("Erro ao conectar ao servidor");
-        exit(EXIT_FAILURE);
-    }
-
-    upload_file(client_socket, file_path, path);
-    close(client_socket);
 
     return 0;
 }
