@@ -4,85 +4,73 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <arpa/inet.h>
-#include <fcntl.h>
+#include <errno.h>
 
 #define PORT 8080
 #define MAX_CONNECTIONS 5
 #define CHUNK_SIZE 128
-#define TRANSFER_RATE 256 // bytes por segundo
-
-
-// TODO .txt esta sendo criado junto como .part
-// TODO ao encerrar durante a transferencia e iniciar de novo, pare que está começando do zero
-// TODO mudar o carregamento para bytes/segundos para saber quantos bytes ja foram transferidos do arquivo
-// TODO ao encerrar o cliente com ctrl+c, o server ta encerrando também, resolver isso 
 
 typedef struct {
     int client_socket;
-    char *file_name;
 } ClientRequest;
 
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; // Prevenir condições de corrida
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 int active_connections = 0;
 
-// Função para enviar arquivo com progresso e .part
-void send_file(int client_socket, const char *file_name) {
-    FILE *file = fopen(file_name, "rb");
-    if (!file) {
-        perror("Erro ao abrir arquivo");
-        send(client_socket, "ERROR: File not found\n", 23, 0);
-        return;
-    }
-
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    send(client_socket, &file_size, sizeof(file_size), 0);
-
+void send_file(int client_socket, const char *remote_path) {
     char buffer[CHUNK_SIZE];
-    size_t bytes_read;
-    long bytes_sent = 0;
+    size_t bytes_received;
+    long total_received = 0;
+
+    char *file_name = strrchr(remote_path, '/');
+    if (!file_name) file_name = (char *)remote_path; // Nome do arquivo sem path
+    else file_name++; // Ignora a barra final
+
     char part_file_name[256];
-    snprintf(part_file_name, sizeof(part_file_name), "%s.part", file_name);
+    snprintf(part_file_name, sizeof(part_file_name), "%s.part", remote_path);
 
     FILE *part_file = fopen(part_file_name, "wb");
     if (!part_file) {
         perror("Erro ao criar arquivo .part");
-        fclose(file);
         close(client_socket);
         return;
     }
 
-    while ((bytes_read = fread(buffer, 1, CHUNK_SIZE, file)) > 0) {
-        if (send(client_socket, buffer, bytes_read, 0) == -1) {
-            perror("Erro na transferência");
-            break;
-        }
+    FILE *file = fopen(remote_path, "wb");
+    if (!file) {
+        perror("Erro ao criar arquivo final");
+        fclose(part_file);
+        close(client_socket);
+        return;
+    }
 
-        fwrite(buffer, 1, bytes_read, part_file);
-        fflush(part_file); // Garantir escrita no disco
-        bytes_sent += bytes_read;
-        int percent = (int)((bytes_sent * 100) / file_size);
-        printf("Enviando '%s': %d%% concluído\n", file_name, percent);
+    long file_size;
+    recv(client_socket, &file_size, sizeof(file_size), 0);
 
-        usleep(1000000 * CHUNK_SIZE / TRANSFER_RATE); // Throttling
+    while ((bytes_received = recv(client_socket, buffer, CHUNK_SIZE, 0)) > 0) {
+        fwrite(buffer, 1, bytes_received, part_file);
+        fwrite(buffer, 1, bytes_received, file);
+        total_received += bytes_received;
+
+        int percent = (int)((total_received * 100) / file_size);
+        printf("Recebendo '%s': %d%% concluído\n", file_name, percent);
+
+        if (total_received >= file_size) break;
     }
 
     fclose(part_file);
     fclose(file);
 
-    if (bytes_sent == file_size) {
-        rename(part_file_name, file_name); // Renomear para o nome final
-        printf("Transferência de '%s' concluída.\n", file_name);
+    if (total_received == file_size) {
+        rename(part_file_name, remote_path);
+        printf("Recebimento de '%s' concluído.\n", file_name);
     } else {
-        printf("Transferência de '%s' interrompida.\n", file_name);
+        printf("Recebimento de '%s' interrompido.\n", file_name);
     }
 
     close(client_socket);
 }
 
-// Função para cada cliente
 void *client_handler(void *arg) {
     ClientRequest *request = (ClientRequest *)arg;
 
@@ -90,7 +78,9 @@ void *client_handler(void *arg) {
     active_connections++;
     pthread_mutex_unlock(&mutex);
 
-    send_file(request->client_socket, request->file_name);
+    char remote_path[256];
+    recv(request->client_socket, remote_path, sizeof(remote_path), 0);
+    send_file(request->client_socket, remote_path);
 
     pthread_mutex_lock(&mutex);
     active_connections--;
@@ -100,7 +90,6 @@ void *client_handler(void *arg) {
     return NULL;
 }
 
-// Servidor principal
 void start_server() {
     int server_socket, client_socket;
     struct sockaddr_in server_addr, client_addr;
@@ -146,12 +135,8 @@ void start_server() {
         }
         pthread_mutex_unlock(&mutex);
 
-        char file_name[256];
-        recv(client_socket, file_name, sizeof(file_name), 0);
-
         ClientRequest *request = malloc(sizeof(ClientRequest));
         request->client_socket = client_socket;
-        request->file_name = strdup(file_name);
 
         pthread_t thread_id;
         pthread_create(&thread_id, NULL, client_handler, request);
@@ -164,4 +149,3 @@ int main() {
     start_server();
     return 0;
 }
-
