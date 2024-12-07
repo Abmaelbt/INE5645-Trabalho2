@@ -5,10 +5,10 @@
 #include <arpa/inet.h>
 #include <errno.h>
 
-#define PORT 8080 // ver se essa declaração da porta aqui esta correta
-#define CHUNK_SIZE 128 // depois mudar para pegar do outro arquivo
-#define RETRY_LIMIT 5 // numero de tentativas para reconexão
-#define RETRY_DELAY 2
+#define PORT 8080
+#define CHUNK_SIZE 128
+#define RETRY_LIMIT 5
+#define RETRY_DELAY 2 // Segundos
 
 void upload_file(int socket, const char *file_path, const char *remote_path) {
     FILE *file = fopen(file_path, "rb");
@@ -26,15 +26,18 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
 
     send(socket, &file_size, sizeof(file_size), 0);
 
-    // no feedback de carregamento, está considerando o chunk_size ao invés da transfer_rate
     char buffer[CHUNK_SIZE];
     size_t bytes_read;
     long bytes_sent = 0;
 
     while ((bytes_read = fread(buffer, 1, CHUNK_SIZE, file)) > 0) {
-        send(socket, buffer, bytes_read, 0);
-        bytes_sent += bytes_read;
+        if (send(socket, buffer, bytes_read, 0) == -1) {
+            perror("Erro ao enviar dados");
+            fclose(file);
+            return;
+        }
 
+        bytes_sent += bytes_read;
         printf("Enviando '%s': %ld bytes enviados de %ld\n", file_path, bytes_sent, file_size);
 
         int percent = (int)((bytes_sent * 100) / file_size);
@@ -42,7 +45,25 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
     }
 
     fclose(file);
-    printf("Envio de '%s' concluído.\n", file_path);
+
+    // Receber confirmação do servidor
+    char confirmation[256];
+    if (recv(socket, confirmation, sizeof(confirmation), 0) > 0) {
+        if (strcmp(confirmation, "SUCCESS") == 0) {
+            printf("Envio de '%s' concluído. Excluindo arquivo local...\n", file_path);
+
+            // Excluir o arquivo local
+            if (remove(file_path) == 0) {
+                printf("________________________________________________________________", file_path);
+            } else {
+                perror("Erro ao excluir arquivo local");
+            }
+        } else {
+            printf("Erro do servidor: %s\n", confirmation);
+        }
+    } else {
+        perror("Erro ao receber confirmação do servidor");
+    }
 }
 
 int connect_to_server(const char *ip) {
@@ -85,7 +106,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    *colon = '\0'; // separa o ip do caminho remoto
+    *colon = '\0'; // Separa o IP do caminho remoto
     char *ip = remote_path;
     char *path = colon + 1;
 

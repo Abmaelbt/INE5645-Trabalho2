@@ -84,8 +84,12 @@ void send_file(int client_socket, const char *remote_path, int client_transfer_r
     if (total_received == file_size) {
         rename(part_file_name, remote_path);
         printf("Recebimento de '%s' concluído.\n", file_name);
+
+        send(client_socket, "SUCCESS", strlen("SUCCESS")+ 1, 0);
     } else {
         printf("Recebimento de '%s' interrompido.\n", file_name);
+
+        send(client_socket, "ERRO: transfer incomplete", strlen("ERROR: transfer incomplete")+1, 0);
     }
 
     close(client_socket);
