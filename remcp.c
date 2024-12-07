@@ -5,9 +5,9 @@
 #include <arpa/inet.h>
 #include <errno.h>
 
-#define PORT 8080
-#define CHUNK_SIZE 128
-#define RETRY_LIMIT 5 // numero de tentativas pare reconexão
+#define PORT 8080 // ver se essa declaração da porta aqui esta correta
+#define CHUNK_SIZE 128 // depois mudar para pegar do outro arquivo
+#define RETRY_LIMIT 5 // numero de tentativas para reconexão
 #define RETRY_DELAY 2
 
 void upload_file(int socket, const char *file_path, const char *remote_path) {
@@ -26,6 +26,7 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
 
     send(socket, &file_size, sizeof(file_size), 0);
 
+    // no feedback de carregamento, está considerando o chunk_size ao invés da transfer_rate
     char buffer[CHUNK_SIZE];
     size_t bytes_read;
     long bytes_sent = 0;

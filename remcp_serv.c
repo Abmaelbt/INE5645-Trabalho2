@@ -61,6 +61,7 @@ void send_file(int client_socket, const char *remote_path, int client_transfer_r
         fwrite(buffer, 1, bytes_received, file);
         fflush(part_file);
 
+        // nao ta sendo usado. remover. pois o server ta rodando em daemon
         total_received += bytes_received;
         printf("Recebendo '%s': %ld bytes recebidos de %ld\n", file_name, total_received, file_size);
 
