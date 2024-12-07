@@ -1,4 +1,3 @@
-```markdown
 # Serviço de transferência de arquivos em rede
 
 Este projeto implementa um serviço de transferência de arquivos em rede, permitindo enviar e baixar arquivos entre servidor e cliente.
@@ -31,5 +30,4 @@ exemplo:
 exemplo:
 ```bash
 ./remcp 192.168.0.10:/home/bdsabmael/Desktop/Abmael/UFSC/Programacao-Paralela-e-Distribuída-INE5645/trabalho-2/INE5645-Trabalho2/server_files/test_1024.txt client_files/test_1024.txt
-```
 ```
