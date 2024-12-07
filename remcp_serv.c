@@ -10,7 +10,7 @@
 #define PORT 8080
 #define MAX_CONNECTIONS 5
 #define CHUNK_SIZE 128
-#define TRANSFER_RATE 256
+#define TRANSFER_RATE 256 // bytes por segundo
 
 typedef struct {
     int client_socket;
@@ -25,29 +25,85 @@ long current_time_ms() {
     return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-void send_file(int client_socket, const char *remote_path, int client_transfer_rate) {
+void delete_file(const char *file_path) {
+    if (remove(file_path) == 0) {
+        printf("Arquivo '%s' removido com sucesso.\n", file_path);
+    } else {
+        perror("Erro ao remover arquivo");
+    }
+}
+
+void send_file_to_client(int client_socket, const char *file_path) {
+    FILE *file = fopen(file_path, "rb");
+    if (!file) {
+        perror("Erro ao abrir arquivo para envio");
+        send(client_socket, "ERROR: File not found", strlen("ERROR: File not found") + 1, 0);
+        return;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    send(client_socket, &file_size, sizeof(file_size), 0);
+
+    char buffer[TRANSFER_RATE];
+    size_t bytes_read;
+    long total_sent = 0;
+    long last_time = current_time_ms();
+
+    while ((bytes_read = fread(buffer, 1, TRANSFER_RATE, file)) > 0) {
+        if (send(client_socket, buffer, bytes_read, 0) == -1) {
+            perror("Erro ao enviar dados");
+            break;
+        }
+
+        total_sent += bytes_read;
+
+        // Controle de taxa de transferência
+        long current_time = current_time_ms();
+        long elapsed_time = current_time - last_time;
+        long sleep_time = (1000 * bytes_read / TRANSFER_RATE) - elapsed_time;
+
+        if (sleep_time > 0) usleep(sleep_time * 1000);
+        last_time = current_time;
+
+        if (total_sent >= file_size) break;
+    }
+
+    fclose(file);
+    printf("Envio de '%s' concluído.\n", file_path);
+
+    // Esperar por comando de exclusão do cliente
+    char delete_command[256];
+    if (recv(client_socket, delete_command, sizeof(delete_command), 0) > 0) {
+        if (strcmp(delete_command, "DELETE_ORIGINAL") == 0) {
+            delete_file(file_path);
+        }
+    }
+}
+
+void receive_file_from_client(int client_socket, const char *file_path, int client_transfer_rate) {
     char buffer[CHUNK_SIZE];
     size_t bytes_received;
     long total_received = 0;
 
-    char *file_name = strrchr(remote_path, '/');
-    if (!file_name) file_name = (char *)remote_path;
-    else file_name++;
-
     char part_file_name[256];
-    snprintf(part_file_name, sizeof(part_file_name), "%s.part", remote_path);
+    snprintf(part_file_name, sizeof(part_file_name), "%s.part", file_path);
 
     FILE *part_file = fopen(part_file_name, "wb");
     if (!part_file) {
         perror("Erro ao criar arquivo .part");
+        send(client_socket, "ERROR: Cannot create .part file", strlen("ERROR: Cannot create .part file") + 1, 0);
         close(client_socket);
         return;
     }
 
-    FILE *file = fopen(remote_path, "wb");
+    FILE *file = fopen(file_path, "wb");
     if (!file) {
         perror("Erro ao criar arquivo final");
         fclose(part_file);
+        send(client_socket, "ERROR: Cannot create final file", strlen("ERROR: Cannot create final file") + 1, 0);
         close(client_socket);
         return;
     }
@@ -61,12 +117,7 @@ void send_file(int client_socket, const char *remote_path, int client_transfer_r
         fwrite(buffer, 1, bytes_received, file);
         fflush(part_file);
 
-        // nao ta sendo usado. remover. pois o server ta rodando em daemon
         total_received += bytes_received;
-        printf("Recebendo '%s': %ld bytes recebidos de %ld\n", file_name, total_received, file_size);
-
-        int percent = (int)((total_received * 100) / file_size);
-        printf("Progresso: %d%% concluído\n", percent);
 
         long current_time = current_time_ms();
         long elapsed_time = current_time - last_time;
@@ -82,17 +133,13 @@ void send_file(int client_socket, const char *remote_path, int client_transfer_r
     fclose(file);
 
     if (total_received == file_size) {
-        rename(part_file_name, remote_path);
-        printf("Recebimento de '%s' concluído.\n", file_name);
-
-        send(client_socket, "SUCCESS", strlen("SUCCESS")+ 1, 0);
+        rename(part_file_name, file_path);
+        printf("Recebimento de '%s' concluído.\n", file_path);
+        send(client_socket, "SUCCESS", strlen("SUCCESS") + 1, 0);
     } else {
-        printf("Recebimento de '%s' interrompido.\n", file_name);
-
-        send(client_socket, "ERRO: transfer incomplete", strlen("ERROR: transfer incomplete")+1, 0);
+        printf("Recebimento de '%s' interrompido.\n", file_path);
+        send(client_socket, "ERROR: Transfer incomplete", strlen("ERROR: Transfer incomplete") + 1, 0);
     }
-
-    close(client_socket);
 }
 
 void *client_handler(void *arg) {
@@ -103,14 +150,22 @@ void *client_handler(void *arg) {
     int client_transfer_rate = TRANSFER_RATE / active_connections;
     pthread_mutex_unlock(&mutex);
 
-    char remote_path[256];
-    recv(request->client_socket, remote_path, sizeof(remote_path), 0);
-    send_file(request->client_socket, remote_path, client_transfer_rate);
+    char request_path[256];
+    if (recv(request->client_socket, request_path, sizeof(request_path), 0) > 0) {
+        if (access(request_path, F_OK) == 0) {
+            // Arquivo existe: enviar para o cliente
+            send_file_to_client(request->client_socket, request_path);
+        } else {
+            // Arquivo não existe: receber do cliente
+            receive_file_from_client(request->client_socket, request_path, client_transfer_rate);
+        }
+    }
 
     pthread_mutex_lock(&mutex);
     active_connections--;
     pthread_mutex_unlock(&mutex);
 
+    close(request->client_socket);
     free(request);
     return NULL;
 }
@@ -141,8 +196,6 @@ void start_server() {
         close(server_socket);
         exit(EXIT_FAILURE);
     }
-
-    printf("Servidor iniciado na porta %d\n", PORT);
 
     while (1) {
         client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &addr_len);
