@@ -54,7 +54,7 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
 
             // Excluir o arquivo local
             if (remove(file_path) == 0) {
-                printf("________________________________________________________________", file_path);
+                printf("Transferencia finalizada");
             } else {
                 perror("Erro ao excluir arquivo local");
             }
