@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 
 #define PORT 8080
 #define MAX_CONNECTIONS 5
@@ -33,6 +34,15 @@ void delete_file(const char *file_path) {
     }
 }
 
+void extract_filename(const char *path, char *filename) {
+    char *base = strrchr(path, '/');
+    if (base) {
+        strcpy(filename, base + 1);
+    } else {
+        strcpy(filename, path);
+    }
+}
+
 void send_file_to_client(int client_socket, const char *file_path) {
     FILE *file = fopen(file_path, "rb");
     if (!file) {
@@ -40,6 +50,10 @@ void send_file_to_client(int client_socket, const char *file_path) {
         send(client_socket, "ERROR: File not found", strlen("ERROR: File not found") + 1, 0);
         return;
     }
+
+    char filename[256];
+    extract_filename(file_path, filename);
+    send(client_socket, filename, strlen(filename) + 1, 0);
 
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
@@ -60,7 +74,6 @@ void send_file_to_client(int client_socket, const char *file_path) {
 
         total_sent += bytes_read;
 
-        // Controle de taxa de transferência
         long current_time = current_time_ms();
         long elapsed_time = current_time - last_time;
         long sleep_time = (1000 * bytes_read / TRANSFER_RATE) - elapsed_time;
@@ -72,23 +85,33 @@ void send_file_to_client(int client_socket, const char *file_path) {
     }
 
     fclose(file);
-    printf("Envio de '%s' concluído.\n", file_path);
 
-    // Esperar por comando de exclusão do cliente
-    char delete_command[256];
-    if (recv(client_socket, delete_command, sizeof(delete_command), 0) > 0) {
-        if (strcmp(delete_command, "DELETE_ORIGINAL") == 0) {
-            delete_file(file_path);
-        }
+    if (total_sent == file_size) {
+        printf("Envio de '%s' concluído.\n", file_path);
+        send(client_socket, "SUCCESS", strlen("SUCCESS") + 1, 0);
+    } else {
+        printf("Erro: envio de '%s' incompleto.\n", file_path);
+        send(client_socket, "ERROR: Transfer incomplete", strlen("ERROR: Transfer incomplete") + 1, 0);
     }
 }
 
-void receive_file_from_client(int client_socket, const char *file_path, int client_transfer_rate) {
-    char buffer[CHUNK_SIZE];
-    size_t bytes_received;
-    long total_received = 0;
+void receive_file_from_client(int client_socket, const char *destination, int client_transfer_rate) {
+    char filename[256];
+    if (recv(client_socket, filename, sizeof(filename), 0) <= 0) {
+        perror("Erro ao receber nome do arquivo");
+        return;
+    }
 
-    char part_file_name[256];
+    struct stat st;
+    char file_path[512];
+    if (stat(destination, &st) == 0 && S_ISDIR(st.st_mode)) {
+        snprintf(file_path, sizeof(file_path), "%s/%s", destination, filename);
+    } else {
+        strncpy(file_path, destination, sizeof(file_path) - 1);
+        file_path[sizeof(file_path) - 1] = '\0';
+    }
+
+    char part_file_name[512];
     snprintf(part_file_name, sizeof(part_file_name), "%s.part", file_path);
 
     FILE *part_file = fopen(part_file_name, "wb");
@@ -99,25 +122,27 @@ void receive_file_from_client(int client_socket, const char *file_path, int clie
         return;
     }
 
-    FILE *file = fopen(file_path, "wb");
-    if (!file) {
-        perror("Erro ao criar arquivo final");
+    long file_size;
+    if (recv(client_socket, &file_size, sizeof(file_size), 0) <= 0) {
+        perror("Erro ao receber tamanho do arquivo");
         fclose(part_file);
-        send(client_socket, "ERROR: Cannot create final file", strlen("ERROR: Cannot create final file") + 1, 0);
-        close(client_socket);
         return;
     }
 
-    long file_size;
-    recv(client_socket, &file_size, sizeof(file_size), 0);
+    char buffer[TRANSFER_RATE];
+    size_t bytes_received;
+    long total_received = 0;
     long last_time = current_time_ms();
 
-    while ((bytes_received = recv(client_socket, buffer, CHUNK_SIZE, 0)) > 0) {
+    while ((bytes_received = recv(client_socket, buffer, TRANSFER_RATE, 0)) > 0) {
         fwrite(buffer, 1, bytes_received, part_file);
-        fwrite(buffer, 1, bytes_received, file);
-        fflush(part_file);
-
         total_received += bytes_received;
+
+        if (total_received % CHUNK_SIZE == 0) {
+            fflush(part_file);
+        }
+
+        printf("Recebendo '%s': %ld bytes recebidos de %ld\n", filename, total_received, file_size);
 
         long current_time = current_time_ms();
         long elapsed_time = current_time - last_time;
@@ -130,15 +155,16 @@ void receive_file_from_client(int client_socket, const char *file_path, int clie
     }
 
     fclose(part_file);
-    fclose(file);
 
     if (total_received == file_size) {
         rename(part_file_name, file_path);
-        printf("Recebimento de '%s' concluído.\n", file_path);
+        printf("Recebimento de '%s' concluído.\n", filename);
         send(client_socket, "SUCCESS", strlen("SUCCESS") + 1, 0);
     } else {
-        printf("Recebimento de '%s' interrompido.\n", file_path);
+        printf("Recebimento de '%s' interrompido.\n", filename);
         send(client_socket, "ERROR: Transfer incomplete", strlen("ERROR: Transfer incomplete") + 1, 0);
+        fclose(part_file);
+        delete_file(part_file_name);
     }
 }
 
@@ -153,12 +179,12 @@ void *client_handler(void *arg) {
     char request_path[256];
     if (recv(request->client_socket, request_path, sizeof(request_path), 0) > 0) {
         if (access(request_path, F_OK) == 0) {
-            // Arquivo existe: enviar para o cliente
             send_file_to_client(request->client_socket, request_path);
         } else {
-            // Arquivo não existe: receber do cliente
             receive_file_from_client(request->client_socket, request_path, client_transfer_rate);
         }
+    } else {
+        perror("Erro ao receber requisição do cliente");
     }
 
     pthread_mutex_lock(&mutex);
