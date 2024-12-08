@@ -19,6 +19,12 @@ clean:
 run-server: $(SERVER_BIN)
 	./$(SERVER_BIN)
 
+stop-server: 
+	pkill remcp_serv
+
+status-server:
+	ss -lntp | grep 8080
+
 help:
 	@echo "  make            - Compila o servidor e o cliente."
 	@echo "  make run-server - Executa o servidor."

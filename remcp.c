@@ -1,12 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <errno.h>
 
 #define PORT 8080
 #define CHUNK_SIZE 128
+#define TRANSFER_RATE 256 // depois ajustar para pegar do server
 #define RETRY_LIMIT 5
 #define RETRY_DELAY 2
 
@@ -18,9 +21,38 @@ void delete_file(const char *file_path) {
     }
 }
 
+long current_time_ms() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+void extract_filename(const char *path, char *filename) {
+    char *base = strrchr(path, '/');
+    if (base) {
+        strcpy(filename, base + 1);
+    } else {
+        strcpy(filename, path);
+    }
+}
+
 void download_file(int socket, const char *local_path) {
+    char filename[256];
+    struct stat st;
+
+    char resolved_path[512]; // Buffer para evitar ponteiro inválido
+
+    // Determinar nome do arquivo, mesmo sem estar especificado no destino
+    if (stat(local_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        recv(socket, filename, sizeof(filename), 0);
+        snprintf(resolved_path, sizeof(resolved_path), "%s/%s", local_path, filename);
+        local_path = resolved_path;
+    } else {
+        extract_filename(local_path, filename);
+    }
+
     FILE *file = NULL;
-    char part_file_name[256];
+    char part_file_name[512]; // Aumentado para evitar truncamento
     snprintf(part_file_name, sizeof(part_file_name), "%s.part", local_path);
 
     file = fopen(part_file_name, "wb");
@@ -30,18 +62,26 @@ void download_file(int socket, const char *local_path) {
         return;
     }
 
-    char buffer[CHUNK_SIZE];
+    char buffer[TRANSFER_RATE];
     size_t bytes_received;
-    long file_size;
+    long file_size = 0;
     long total_received = 0;
 
+    // Receber tamanho do arquivo
     if (recv(socket, &file_size, sizeof(file_size), 0) <= 0) {
         perror("Erro ao receber tamanho do arquivo");
         fclose(file);
         return;
     }
 
-    while ((bytes_received = recv(socket, buffer, CHUNK_SIZE, 0)) > 0) {
+    if (file_size <= 0) {
+        fprintf(stderr, "Tamanho do arquivo inválido: %ld\n", file_size);
+        fclose(file);
+        return;
+    }
+
+    // Receber o conteúdo do arquivo
+    while ((bytes_received = recv(socket, buffer, TRANSFER_RATE, 0)) > 0) {
         fwrite(buffer, 1, bytes_received, file);
         total_received += bytes_received;
 
@@ -49,7 +89,7 @@ void download_file(int socket, const char *local_path) {
             fflush(file);
         }
 
-        printf("Recebendo '%s': %ld bytes recebidos de %ld\n", local_path, total_received, file_size);
+        printf("Recebendo '%s': %ld bytes recebidos de %ld\n", filename, total_received, file_size);
 
         if (total_received >= file_size) break;
     }
@@ -58,13 +98,11 @@ void download_file(int socket, const char *local_path) {
 
     if (total_received == file_size) {
         rename(part_file_name, local_path);
-        printf("Recebimento de '%s' concluído.\n", local_path);
+        printf("Recebimento de '%s' concluído.\n", filename);
     } else {
-        printf("Recebimento de '%s' interrompido.\n", local_path);
-        return;
+        printf("Erro: Recebimento de '%s' interrompido.\n", filename);
+        delete_file(part_file_name); // Remover arquivo parcial em caso de erro
     }
-
-    send(socket, "DELETE_ORIGINAL", strlen("DELETE_ORIGINAL") + 1, 0);
 }
 
 void upload_file(int socket, const char *file_path, const char *remote_path) {
@@ -87,6 +125,8 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
     size_t bytes_read;
     long bytes_sent = 0;
 
+    long last_time = current_time_ms();
+
     while ((bytes_read = fread(buffer, 1, CHUNK_SIZE, file)) > 0) {
         if (send(socket, buffer, bytes_read, 0) == -1) {
             perror("Erro ao enviar dados");
@@ -96,9 +136,12 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
 
         bytes_sent += bytes_read;
 
-        if (bytes_sent % CHUNK_SIZE == 0) {
-            fflush(file);
-        }
+        long current_time = current_time_ms();
+        long elapsed_time = current_time - last_time;
+        long sleep_time = (1000 * bytes_read / TRANSFER_RATE) - elapsed_time;
+
+        if (sleep_time > 0) usleep(sleep_time * 1000);
+        last_time = current_time;
 
         printf("Enviando '%s': %ld bytes enviados de %ld\n", file_path, bytes_sent, file_size);
 
