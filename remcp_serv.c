@@ -6,7 +6,6 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/time.h>
-#include <sys/stat.h>
 
 #define PORT 8080
 #define MAX_CONNECTIONS 5
@@ -61,9 +60,22 @@ void send_file_to_client(int client_socket, const char *file_path) {
 
     send(client_socket, &file_size, sizeof(file_size), 0);
 
+    // Receive already received size from client
+    long client_offset = 0;
+    if (recv(client_socket, &client_offset, sizeof(client_offset), 0) <= 0) {
+        perror("Erro ao receber offset do cliente");
+        fclose(file);
+        return;
+    }
+
+    printf("Cliente já possui %ld bytes de '%s'\n", client_offset, file_path);
+
+    // Skip already sent bytes
+    fseek(file, client_offset, SEEK_SET);
+
     char buffer[TRANSFER_RATE];
     size_t bytes_read;
-    long total_sent = 0;
+    long total_sent = client_offset;
     long last_time = current_time_ms();
 
     while ((bytes_read = fread(buffer, 1, TRANSFER_RATE, file)) > 0) {
@@ -81,6 +93,8 @@ void send_file_to_client(int client_socket, const char *file_path) {
         if (sleep_time > 0) usleep(sleep_time * 1000);
         last_time = current_time;
 
+        printf("Enviando '%s': %ld bytes enviados de %ld\n", file_path, total_sent, file_size);
+
         if (total_sent >= file_size) break;
     }
 
@@ -95,32 +109,28 @@ void send_file_to_client(int client_socket, const char *file_path) {
     }
 }
 
-void receive_file_from_client(int client_socket, const char *destination, int client_transfer_rate) {
-    char filename[256];
-    if (recv(client_socket, filename, sizeof(filename), 0) <= 0) {
-        perror("Erro ao receber nome do arquivo");
-        return;
-    }
+void receive_file_from_client(int client_socket, const char *file_path, int client_transfer_rate) {
+    char buffer[CHUNK_SIZE];
+    size_t bytes_received;
+    long total_received = 0;
 
-    struct stat st;
-    char file_path[512];
-    if (stat(destination, &st) == 0 && S_ISDIR(st.st_mode)) {
-        snprintf(file_path, sizeof(file_path), "%s/%s", destination, filename);
-    } else {
-        strncpy(file_path, destination, sizeof(file_path) - 1);
-        file_path[sizeof(file_path) - 1] = '\0';
-    }
-
-    char part_file_name[512];
+    char part_file_name[256];
     snprintf(part_file_name, sizeof(part_file_name), "%s.part", file_path);
 
-    FILE *part_file = fopen(part_file_name, "wb");
+    // Check for existing partial file
+    FILE *part_file = fopen(part_file_name, "ab+");
     if (!part_file) {
-        perror("Erro ao criar arquivo .part");
+        perror("Erro ao criar/abrir arquivo .part");
         send(client_socket, "ERROR: Cannot create .part file", strlen("ERROR: Cannot create .part file") + 1, 0);
         close(client_socket);
         return;
     }
+
+    fseek(part_file, 0, SEEK_END);
+    total_received = ftell(part_file);
+
+    // Inform client about already received bytes
+    send(client_socket, &total_received, sizeof(total_received), 0);
 
     long file_size;
     if (recv(client_socket, &file_size, sizeof(file_size), 0) <= 0) {
@@ -131,25 +141,13 @@ void receive_file_from_client(int client_socket, const char *destination, int cl
         return;
     }
 
-    if (file_size <= 0) {
-        fprintf(stderr, "Tamanho do arquivo inválido: %ld\n", file_size);
-        fclose(part_file);
-        send(client_socket, "ERROR: Invalid file size", strlen("ERROR: Invalid file size") + 1, 0);
-        close(client_socket);
-        return;
-    }
+    printf("Recebendo arquivo '%s': %ld bytes já recebidos de %ld\n", file_path, total_received, file_size);
 
     long last_time = current_time_ms();
 
-    while ((bytes_received = recv(client_socket, buffer, TRANSFER_RATE, 0)) > 0) {
+    while ((bytes_received = recv(client_socket, buffer, CHUNK_SIZE, 0)) > 0) {
         fwrite(buffer, 1, bytes_received, part_file);
         total_received += bytes_received;
-
-        if (total_received % CHUNK_SIZE == 0) {
-            fflush(part_file);
-        }
-
-        printf("Recebendo '%s': %ld bytes recebidos de %ld\n", filename, total_received, file_size);
 
         long current_time = current_time_ms();
         long elapsed_time = current_time - last_time;
@@ -158,7 +156,7 @@ void receive_file_from_client(int client_socket, const char *destination, int cl
         if (sleep_time > 0) usleep(sleep_time * 1000);
         last_time = current_time;
 
-        printf("Recebendo arquivo: %ld bytes recebidos de %ld\n", total_received, file_size);
+        printf("Recebendo '%s': %ld bytes recebidos de %ld\n", file_path, total_received, file_size);
 
         if (total_received >= file_size) break;
     }
@@ -175,10 +173,7 @@ void receive_file_from_client(int client_socket, const char *destination, int cl
         }
     } else {
         printf("Recebimento de '%s' interrompido.\n", file_path);
-        delete_file(part_file_name);
         send(client_socket, "ERROR: Transfer incomplete", strlen("ERROR: Transfer incomplete") + 1, 0);
-        fclose(part_file);
-        delete_file(part_file_name);
     }
 }
 
@@ -193,12 +188,12 @@ void *client_handler(void *arg) {
     char request_path[256];
     if (recv(request->client_socket, request_path, sizeof(request_path), 0) > 0) {
         if (access(request_path, F_OK) == 0) {
+            // Arquivo existe: enviar para o cliente
             send_file_to_client(request->client_socket, request_path);
         } else {
+            // Arquivo não existe: receber do cliente
             receive_file_from_client(request->client_socket, request_path, client_transfer_rate);
         }
-    } else {
-        perror("Erro ao receber requisição do cliente");
     }
 
     pthread_mutex_lock(&mutex);
