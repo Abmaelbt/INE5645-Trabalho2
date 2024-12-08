@@ -15,7 +15,7 @@
 
 void delete_file(const char *file_path) {
     if (remove(file_path) == 0) {
-        printf("Arquivo '%s' removido com sucesso.\n", file_path);
+        printf("Arquivo '%s' removido com sucesso.\n");
     } else {
         perror("Erro ao remover arquivo");
     }
@@ -40,9 +40,7 @@ void download_file(int socket, const char *local_path) {
     char filename[256];
     struct stat st;
 
-    char resolved_path[512]; // Buffer para evitar ponteiro inválido
-
-    // Determinar nome do arquivo, mesmo sem estar especificado no destino
+    char resolved_path[512];
     if (stat(local_path, &st) == 0 && S_ISDIR(st.st_mode)) {
         recv(socket, filename, sizeof(filename), 0);
         snprintf(resolved_path, sizeof(resolved_path), "%s/%s", local_path, filename);
@@ -51,43 +49,44 @@ void download_file(int socket, const char *local_path) {
         extract_filename(local_path, filename);
     }
 
-    FILE *file = NULL;
-    char part_file_name[512]; // Aumentado para evitar truncamento
+    char part_file_name[512];
     snprintf(part_file_name, sizeof(part_file_name), "%s.part", local_path);
 
-    file = fopen(part_file_name, "wb");
+    FILE *file = fopen(part_file_name, "ab+");
     if (!file) {
-        perror("Erro ao criar arquivo .part para download");
+        perror("Erro ao criar/abrir arquivo .part para download");
         send(socket, "ERROR: Cannot create .part file", strlen("ERROR: Cannot create .part file") + 1, 0);
         return;
     }
 
-    char buffer[TRANSFER_RATE];
-    size_t bytes_received;
-    long file_size = 0;
-    long total_received = 0;
+    fseek(file, 0, SEEK_END);
+    long local_offset = ftell(file);
+    send(socket, &local_offset, sizeof(local_offset), 0);
 
-    // Receber tamanho do arquivo
+    long file_size = 0;
     if (recv(socket, &file_size, sizeof(file_size), 0) <= 0) {
         perror("Erro ao receber tamanho do arquivo");
         fclose(file);
         return;
     }
 
-    if (file_size <= 0) {
-        fprintf(stderr, "Tamanho do arquivo inválido: %ld\n", file_size);
-        fclose(file);
-        return;
-    }
+    printf("Recebendo '%s': retomando de %ld bytes de %ld\n", filename, local_offset, file_size);
 
-    // Receber o conteúdo do arquivo
+    char buffer[TRANSFER_RATE];
+    size_t bytes_received;
+    long total_received = local_offset;
+    long last_time = current_time_ms();
+
     while ((bytes_received = recv(socket, buffer, TRANSFER_RATE, 0)) > 0) {
         fwrite(buffer, 1, bytes_received, file);
         total_received += bytes_received;
 
-        if (total_received % CHUNK_SIZE == 0) {
-            fflush(file);
-        }
+        long current_time = current_time_ms();
+        long elapsed_time = current_time - last_time;
+        long sleep_time = (1000 * bytes_received / TRANSFER_RATE) - elapsed_time;
+
+        if (sleep_time > 0) usleep(sleep_time * 1000);
+        last_time = current_time;
 
         printf("Recebendo '%s': %ld bytes recebidos de %ld\n", filename, total_received, file_size);
 
@@ -99,9 +98,10 @@ void download_file(int socket, const char *local_path) {
     if (total_received == file_size) {
         rename(part_file_name, local_path);
         printf("Recebimento de '%s' concluído.\n", filename);
+        send(socket, "SUCCESS", strlen("SUCCESS") + 1, 0);
     } else {
-        printf("Erro: Recebimento de '%s' interrompido.\n", filename);
-        delete_file(part_file_name); // Remover arquivo parcial em caso de erro
+        printf("Recebimento de '%s' interrompido.\n", filename);
+        send(socket, "ERROR: Transfer incomplete", strlen("ERROR: Transfer incomplete") + 1, 0);
     }
 }
 
@@ -113,18 +113,45 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
         return;
     }
 
-    send(socket, remote_path, strlen(remote_path) + 1, 0);
+    // Extract filename from the source file
+    char filename[256];
+    extract_filename(file_path, filename);
+
+    // Determine if remote_path is a directory
+    struct stat st;
+    char resolved_remote_path[512];
+    if (stat(remote_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        // If remote_path is a directory, append the filename
+        snprintf(resolved_remote_path, sizeof(resolved_remote_path), "%s/%s", remote_path, filename);
+    } else {
+        // Use remote_path as-is
+        strncpy(resolved_remote_path, remote_path, sizeof(resolved_remote_path) - 1);
+        resolved_remote_path[sizeof(resolved_remote_path) - 1] = '\0';
+    }
+
+    send(socket, resolved_remote_path, strlen(resolved_remote_path) + 1, 0);
 
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
+    // Send file size
     send(socket, &file_size, sizeof(file_size), 0);
+
+    // Receive offset for resuming transfer
+    long total_sent = 0;
+    if (recv(socket, &total_sent, sizeof(total_sent), 0) <= 0) {
+        perror("Erro ao receber offset do servidor");
+        fclose(file);
+        return;
+    }
+
+    printf("Enviando '%s': retomando a partir de %ld bytes\n", file_path, total_sent);
+
+    fseek(file, total_sent, SEEK_SET);
 
     char buffer[CHUNK_SIZE];
     size_t bytes_read;
-    long bytes_sent = 0;
-
     long last_time = current_time_ms();
 
     while ((bytes_read = fread(buffer, 1, CHUNK_SIZE, file)) > 0) {
@@ -134,7 +161,7 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
             return;
         }
 
-        bytes_sent += bytes_read;
+        total_sent += bytes_read;
 
         long current_time = current_time_ms();
         long elapsed_time = current_time - last_time;
@@ -143,9 +170,9 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
         if (sleep_time > 0) usleep(sleep_time * 1000);
         last_time = current_time;
 
-        printf("Enviando '%s': %ld bytes enviados de %ld\n", file_path, bytes_sent, file_size);
+        printf("Enviando '%s': %ld bytes enviados de %ld\n", file_path, total_sent, file_size);
 
-        if (bytes_sent >= file_size) break;
+        if (total_sent >= file_size) break;
     }
 
     fclose(file);
@@ -153,8 +180,7 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
     char confirmation[256];
     if (recv(socket, confirmation, sizeof(confirmation), 0) > 0) {
         if (strcmp(confirmation, "SUCCESS") == 0) {
-            printf("Envio de '%s' concluído. Excluindo arquivo local...\n", file_path);
-            delete_file(file_path);
+            printf("Envio de '%s' concluído.\n", file_path);
         } else {
             printf("Erro do servidor: %s\n", confirmation);
         }
@@ -162,6 +188,7 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
         perror("Erro ao receber confirmação do servidor");
     }
 }
+
 
 int connect_to_server(const char *ip) {
     int client_socket = socket(AF_INET, SOCK_STREAM, 0);
