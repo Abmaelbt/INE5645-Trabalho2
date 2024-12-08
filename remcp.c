@@ -2,13 +2,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <errno.h>
 
 #define PORT 8080
 #define CHUNK_SIZE 128
-#define TRANSFER_RATE 256
+#define TRANSFER_RATE 256 // depois ajustar para pegar do server
 #define RETRY_LIMIT 5
 #define RETRY_DELAY 2
 
@@ -18,6 +19,12 @@ void delete_file(const char *file_path) {
     } else {
         perror("Erro ao remover arquivo");
     }
+}
+
+long current_time_ms() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
 void extract_filename(const char *path, char *filename) {
@@ -118,7 +125,9 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
 
     char buffer[TRANSFER_RATE];
     size_t bytes_read;
-    long total_sent = 0;
+    long bytes_sent = 0;
+
+    long last_time = current_time_ms();
 
     // Enviar dados do arquivo
     while ((bytes_read = fread(buffer, 1, TRANSFER_RATE, file)) > 0) {
@@ -129,7 +138,12 @@ void upload_file(int socket, const char *file_path, const char *remote_path) {
 
         total_sent += bytes_read;
 
-        printf("Enviando '%s': %ld bytes enviados de %ld\n", filename, total_sent, file_size);
+        long current_time = current_time_ms();
+        long elapsed_time = current_time - last_time;
+        long sleep_time = (1000 * bytes_read / TRANSFER_RATE) - elapsed_time;
+
+        if (sleep_time > 0) usleep(sleep_time * 1000);
+        last_time = current_time;
 
         if (total_sent >= file_size) break;
 

@@ -126,12 +126,19 @@ void receive_file_from_client(int client_socket, const char *destination, int cl
     if (recv(client_socket, &file_size, sizeof(file_size), 0) <= 0) {
         perror("Erro ao receber tamanho do arquivo");
         fclose(part_file);
+        send(client_socket, "ERROR: Failed to receive file size", strlen("ERROR: Failed to receive file size") + 1, 0);
+        close(client_socket);
         return;
     }
 
-    char buffer[TRANSFER_RATE];
-    size_t bytes_received;
-    long total_received = 0;
+    if (file_size <= 0) {
+        fprintf(stderr, "Tamanho do arquivo inválido: %ld\n", file_size);
+        fclose(part_file);
+        send(client_socket, "ERROR: Invalid file size", strlen("ERROR: Invalid file size") + 1, 0);
+        close(client_socket);
+        return;
+    }
+
     long last_time = current_time_ms();
 
     while ((bytes_received = recv(client_socket, buffer, TRANSFER_RATE, 0)) > 0) {
@@ -151,17 +158,24 @@ void receive_file_from_client(int client_socket, const char *destination, int cl
         if (sleep_time > 0) usleep(sleep_time * 1000);
         last_time = current_time;
 
+        printf("Recebendo arquivo: %ld bytes recebidos de %ld\n", total_received, file_size);
+
         if (total_received >= file_size) break;
     }
 
     fclose(part_file);
 
     if (total_received == file_size) {
-        rename(part_file_name, file_path);
-        printf("Recebimento de '%s' concluído.\n", filename);
-        send(client_socket, "SUCCESS", strlen("SUCCESS") + 1, 0);
+        if (rename(part_file_name, file_path) == 0) {
+            printf("Recebimento de '%s' concluído.\n", file_path);
+            send(client_socket, "SUCCESS", strlen("SUCCESS") + 1, 0);
+        } else {
+            perror("Erro ao renomear arquivo");
+            send(client_socket, "ERROR: Cannot rename file", strlen("ERROR: Cannot rename file") + 1, 0);
+        }
     } else {
-        printf("Recebimento de '%s' interrompido.\n", filename);
+        printf("Recebimento de '%s' interrompido.\n", file_path);
+        delete_file(part_file_name);
         send(client_socket, "ERROR: Transfer incomplete", strlen("ERROR: Transfer incomplete") + 1, 0);
         fclose(part_file);
         delete_file(part_file_name);
