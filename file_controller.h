@@ -21,4 +21,4 @@ long get_size_file(char *file_path, int verbose);
 
 int file_exists(char *file_path);
 
-#endif // FILE_CONTROLLER_H
+#endif

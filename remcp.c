@@ -10,56 +10,47 @@
 
 int verbose = 0;
 
-// Analisa os argumentos de entrada para separar host e caminho do arquivo
+// separa host e caminho do arquivo do argumento fornecido
 void parse_arguments(const char *arg, char **host, char **file_path)
 {
     char *colon = strchr(arg, ':');
     if (colon)
     {
-        // Caso o argumento tenha host especificado, separa host e caminho
         *host = strndup(arg, colon - arg);
         *file_path = strdup(colon + 1);
     }
     else
     {
-        // Caso não tenha host, usa o localhost por padrão
         *host = "127.0.0.1";
         *file_path = strdup(arg);
     }
 }
 
-// Gerencia o recebimento de arquivos do servidor
+// gerencia o recebimento de arquivos do servidor
 int receive_file(int socket_fd, message_t *message, int verbose)
 {
-    verbose_printf(verbose, "Recebendo arquivo...\n");
+    verbose_printf(verbose, "recebendo arquivo\n");
     while (1)
     {
-        // Lê dados recebidos do servidor
         int valread = handle_receive_message(socket_fd, message->buffer);
-
-        // Escreve a parte recebida no arquivo temporário
         int result = handle_write_part_file(message->buffer, valread, message, verbose);
 
-        // Finaliza o recebimento se o arquivo estiver completo
         if (result != 0)
         {
             return result;
         }
-        // Envia uma confirmação para o servidor
         send(socket_fd, message->buffer, strlen(message->buffer), 0);
     }
 }
 
 int main(int argc, char const *argv[])
 {
-    // Verifica o número de argumentos passados
     if (argc < 3 || argc > 4)
     {
-        printf("Uso: ./client [host:]caminho_origem [host:]caminho_destino [-v]\n");
+        printf("uso: ./client [host:]caminho_origem [host:]caminho_destino [-v]\n");
         return 1;
     }
 
-    // Variáveis para armazenar informações dos caminhos e servidores
     char *host_origin = NULL;
     char *file_path_origin = NULL;
     char *host_destination = NULL;
@@ -67,50 +58,41 @@ int main(int argc, char const *argv[])
     char *host_server = NULL;
     int upload = 0;
 
-    // Analisa os argumentos fornecidos
     parse_arguments(argv[1], &host_origin, &file_path_origin);
     parse_arguments(argv[2], &host_destination, &file_path_destination);
 
-    // Define se o modo verboso está ativado
     verbose = argc == 4 && strcmp(argv[3], "-v") == 0;
 
-    // Determina se a operação é um upload
     upload = strcmp(host_origin, "127.0.0.1") == 0;
-
-    // Define o servidor de destino
     host_server = upload ? host_destination : host_origin;
 
     int socket_fd;
     struct sockaddr_in address;
 
-    // Cria e configura o socket
+    // cria e configura o socket
     create_socket(&socket_fd, &address, host_server);
 
-    // Estabelece conexão com o servidor
     if (connect(socket_fd, (struct sockaddr *)&address, sizeof(address)) < 0)
     {
-        perror("Falha ao conectar ao servidor.");
+        perror("falha ao conectar ao servidor");
         exit(EXIT_FAILURE);
     }
 
-    verbose_printf(verbose, "Conexão estabelecida com o servidor...\n");
+    verbose_printf(verbose, "conexao estabelecida com o servidor\n");
 
-    // Aloca memória para a estrutura de mensagem
     message_t *message = (message_t *)malloc(sizeof(message_t));
     message->buffer = (char *)malloc(BUFFER_SIZE);
     message->upload = upload;
 
-    //Gerencia o envio ou recebimento de arquivos
+    // gerencia upload ou download de arquivo
     if (upload)
     {
-        //Envio de arquivo
         send_upload(socket_fd, message, verbose);
         send_file_path(socket_fd, message, file_path_destination, verbose);
         send_file(socket_fd, message, file_path_origin, verbose);
     }
     else
     {
-        //Recebimento de arquivo
         send_upload(socket_fd, message, verbose);
         send_file_path(socket_fd, message, file_path_origin, verbose);
         message->file_path = file_path_destination;
@@ -118,7 +100,7 @@ int main(int argc, char const *argv[])
         receive_file(socket_fd, message, verbose);
     }
 
-    // Fecha o socket e libera memória alocada
+    // libera recursos e encerra a conexao
     close(socket_fd);
     free(message);
 

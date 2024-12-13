@@ -4,22 +4,18 @@
 #include <unistd.h>
 #include "file_controller.h"
 
-// Obtém o caminho absoluto de um arquivo a partir do diretório atual
+// obtem o caminho absoluto a partir do diretorio atual
 int get_abs_path(char *file_path, char **abs_path, int verbose)
 {
-    // Obtém o diretório de trabalho atual
-    char *cwd = getcwd(NULL, 0); // Aloca memória para armazenar o caminho atual
+    char *cwd = getcwd(NULL, 0); // obtém o diretorio de trabalho atual
     if (cwd == NULL)
     {
         perror("Erro ao obter o diretório de trabalho atual."); 
         return -1;
     }
 
-    // Calcula o tamanho necessário para armazenar o caminho absoluto
-    size_t required_size = strlen(cwd) + strlen(file_path) + 2; // +2 para '/' e '\0'
-
-    // Aloca memória para o caminho absoluto
-    *abs_path = malloc(required_size);
+    size_t required_size = strlen(cwd) + strlen(file_path) + 2; // calcula o tamanho do caminho absoluto
+    *abs_path = malloc(required_size); // aloca memoria para o caminho absoluto
     if (*abs_path == NULL)
     {
         perror("Erro ao alocar memória para o caminho absoluto."); 
@@ -27,24 +23,17 @@ int get_abs_path(char *file_path, char **abs_path, int verbose)
         return -1;
     }
 
-    //Cria o caminho absoluto
-    snprintf(*abs_path, required_size, "%s/%s", cwd, file_path);
-
-    // Exibe o caminho absoluto se o modo verboso estiver ativo
-    verbose_printf(verbose, "Caminho absoluto: %s\n", *abs_path);
-
-    free(cwd); // Libera a memória alocada para o caminho atual
+    snprintf(*abs_path, required_size, "%s/%s", cwd, file_path); // cria o caminho absoluto
+    verbose_printf(verbose, "Caminho absoluto: %s\n", *abs_path); // exibe o caminho absoluto no modo verboso
+    free(cwd); // libera a memoria do diretório de trabalho
     return 0;
 }
 
-// Cria o caminho de arquivo temporário com extensão ".part"
+// cria o caminho do arquivo temporário com extensão ".part"
 int get_part_file_path(char *file_path, char **file_path_with_part)
 {
-    // Calcula o tamanho necessário para armazenar o caminho com ".part"
-    size_t required_size = strlen(file_path) + strlen(".part") + 1;
-
-    // Aloca memória para o novo caminho
-    *file_path_with_part = malloc(required_size);
+    size_t required_size = strlen(file_path) + strlen(".part") + 1; // calcula o tamanho para o arquivo com .part
+    *file_path_with_part = malloc(required_size); // aloca memoria para o caminho com .part
     if (*file_path_with_part == NULL)
     {
         perror("Erro ao alocar memória para o caminho parcial."); 
@@ -52,81 +41,69 @@ int get_part_file_path(char *file_path, char **file_path_with_part)
         return -1;
     }
 
-    // Constrói o caminho parcial
-    snprintf(*file_path_with_part, required_size, "%s.part", file_path);
+    snprintf(*file_path_with_part, required_size, "%s.part", file_path); // cria o caminho parcial
     return 0;
 }
 
-// Escreve os dados recebidos no arquivo parcial
+// escreve os dados no arquivo temporário
 int handle_write_part_file(char *buffer, int valread, message_t *message, int verbose)
 {
-    // Gera o caminho do arquivo parcial
     char *file_path_with_part;
-    get_part_file_path(message->file_path, &file_path_with_part);
+    get_part_file_path(message->file_path, &file_path_with_part); // gera o caminho do arquivo parcial
 
-    // Abre o arquivo em modo de escrita no final do arquivo
-    FILE *file = fopen(file_path_with_part, "a");
+    FILE *file = fopen(file_path_with_part, "a"); // abre o arquivo em modo de escrita
     if (file == NULL)
     {
         perror("Caminho do arquivo inválido."); 
         return -1;
     }
 
-    // Escreve os dados recebidos no arquivo
-    fprintf(file, "%s", buffer);
+    fprintf(file, "%s", buffer); // escreve os dados no arquivo
     fclose(file);
 
-    // Verifica se o último caractere do buffer é o marcador de EOF
-    if (buffer[valread - 1] == EOF_MARKER)
+    if (buffer[valread - 1] == EOF_MARKER) // verifica se o último caractere é o marcador de EOF
     {
-        // Remove o marcador de EOF do arquivo parcial
         FILE *file = fopen(file_path_with_part, "r+");
-        fseek(file, -1, SEEK_END);
-        ftruncate(fileno(file), ftell(file)); // Trunca o arquivo para remover o EOF
+        fseek(file, -1, SEEK_END); // posiciona o ponteiro no final do arquivo
+        ftruncate(fileno(file), ftell(file)); // trunca o arquivo para remover o EOF
         fclose(file);
 
-        // Renomeia o arquivo parcial para o nome final
-        verbose_printf(verbose, "Renomeando %s para %s...\n", file_path_with_part, message->file_path);
-        rename(file_path_with_part, message->file_path);
+        verbose_printf(verbose, "Renomeando %s para %s...\n", file_path_with_part, message->file_path); 
+        rename(file_path_with_part, message->file_path); // renomeia o arquivo para o nome final
         printf("Arquivo %s recebido com sucesso.\n", message->file_path); 
         free(file_path_with_part);
         return 1;
     }
 
-    // Libera memória do caminho parcial
-    free(file_path_with_part);
+    free(file_path_with_part); // libera a memoria do caminho do arquivo
     return 0;
 }
 
-// Verifica se o arquivo existe
+// verifica se o arquivo existe
 int file_exists(char *file_path)
 {
-    // Tenta abrir o arquivo para leitura
-    FILE *file = fopen(file_path, "r");
+    FILE *file = fopen(file_path, "r"); // tenta abrir o arquivo para leitura
     if (file == NULL)
     {
-        return 0; // Retorna 0 se o arquivo não existe
+        return 0; // arquivo nao existe
     }
     fclose(file);
-    return 1; // Retorna 1 se o arquivo existe
+    return 1; // arquivo existe
 }
 
-// Obtém o tamanho do arquivo em bytes
+// obtem o tamanho do arquivo
 long get_size_file(char *file_path, int verbose)
 {
-    // Abre o arquivo para leitura
-    FILE *file = fopen(file_path, "r");
+    FILE *file = fopen(file_path, "r"); // abre o arquivo para leitura
     if (file == NULL)
     {
-        return 0; // Retorna 0 se o arquivo não existe
+        return 0; // arquivo nao existe
     }
 
-    // Posiciona o ponteiro no final do arquivo para medir o tamanho
-    fseek(file, 0, SEEK_END);
-    long size = ftell(file); // Obtém o tamanho em bytes
+    fseek(file, 0, SEEK_END); // posiciona o ponteiro no final do arquivo
+    long size = ftell(file); // obtem o tamanho do arquivo
     fclose(file);
 
-    // Exibe o tamanho do arquivo no modo verboso
-    verbose_printf(verbose, "Arquivo %s: %ld bytes\n", file_path, size);
+    verbose_printf(verbose, "Arquivo %s: %ld bytes\n", file_path, size); // exibe o tamanho do arquivo no modo verboso
     return size;
 }

@@ -3,7 +3,6 @@
 
 #include <arpa/inet.h>
 
-// Tradução das mensagens de erro para português
 #define FAILED_TO_SEND_MESSAGE_EXCEPTION "Falha ao enviar mensagem. [0100]\n"
 #define SOCKET_CREATE_EXCEPTION "Falha ao criar socket. [0101]\n"
 #define SOCKET_BIND_EXCEPTION "Falha ao associar socket. [0102]\n"
@@ -17,15 +16,15 @@
 #define PORT 8080
 #define BUFFER_SIZE 128
 
-// Estrutura de mensagens para comunicação
+// estrutura de mensagens para comunicacao
 typedef struct message_t
 {
-    char *file_path; // Caminho do arquivo associado à mensagem
-    char *buffer;    // Buffer de dados da mensagem
-    int upload;      // Indica se é upload (1) ou download (0)
+    char *file_path; // caminho da mensagem
+    char *buffer;    // buffer da mensagem
+    int upload;      // 1 para upload, 0 para download
 } message_t;
 
-// Declaração de funções auxiliares para manipulação de sockets
+// funcoes auxiliares para manipulacao de sockets
 void create_socket(int *socket_fd, struct sockaddr_in *address, char *host_destination);
 void send_message(int socket_fd, message_t *message);
 void send_upload(int socket_fd, message_t *message, int verbose);
@@ -35,4 +34,4 @@ int send_file(int socket_fd, message_t *message, char *file_path_origin, int ver
 int handle_receive_message(int socket_fd, char *buffer);
 void verbose_printf(int verbose, const char *format, ...);
 
-#endif // SOCKET_H
+#endif

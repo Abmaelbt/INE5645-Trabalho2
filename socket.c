@@ -1,4 +1,3 @@
-// Inclui bibliotecas padrão e cabeçalhos personalizados
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -10,35 +9,30 @@
 #include "socket.h"
 #include "file_controller.h"
 
-// Cria e configura o socket
+// cria e configura o socket tcp com timeout para envio e recebimento
 void create_socket(int *socket_fd, struct sockaddr_in *address, char *host_destination)
 {
     struct timeval timeout;
 
-    // Criação do socket com protocolo TCP
     if ((*socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0)
     {
         perror("Falha ao criar o socket.");
         exit(EXIT_FAILURE);
     }
 
-    // Configura o endereço e a porta
     address->sin_family = AF_INET;
     address->sin_port = htons(PORT);
     address->sin_addr.s_addr = host_destination != NULL ? inet_addr(host_destination) : INADDR_ANY;
 
-    // Define timeout para receber dados
-    timeout.tv_sec = 5;  // 5 segundos
-    timeout.tv_usec = 0; // 0 microsegundos
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
 
-    // Configura timeout para operações de recebimento
     if (setsockopt(*socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
     {
         perror("Erro ao configurar o timeout de recebimento.");
         close(*socket_fd);
     }
 
-    // Configura timeout para operações de envio
     if (setsockopt(*socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0)
     {
         perror("Erro ao configurar o timeout de envio.");
@@ -46,68 +40,61 @@ void create_socket(int *socket_fd, struct sockaddr_in *address, char *host_desti
     }
 }
 
-// Envia uma mensagem pelo socket
+// envia o conteúdo do buffer e aguarda resposta do servidor
 void send_message(int socket_fd, message_t *message)
 {
-    // Envia o conteúdo do buffer
     if (send(socket_fd, message->buffer, strlen(message->buffer), 0) == -1)
     {
-        perror("Falha ao enviar mensagem."); 
+        perror("Falha ao enviar mensagem.");
     }
-    // Aguarda e processa a resposta do servidor
     handle_receive_message(socket_fd, message->buffer);
 }
 
-// Envia um sinal indicando se é upload (1) ou download (0)
+// envia sinal indicando upload ou download
 void send_upload(int socket_fd, message_t *message, int verbose)
 {
     verbose_printf(verbose, "Enviando sinal de upload...\n");
-    char upload_char = message->upload ? '1' : '0'; // Define '1' para upload e '0' para download
-    strncpy(message->buffer, &upload_char, 1); // Copia o sinal para o buffer
-    message->buffer[1] = '\0'; // Finaliza o buffer com '\0'
-    send_message(socket_fd, message); // Envia o sinal
+    char upload_char = message->upload ? '1' : '0';
+    strncpy(message->buffer, &upload_char, 1);
+    message->buffer[1] = '\0';
+    send_message(socket_fd, message);
 }
 
-// Envia o caminho do arquivo
+// envia o caminho do arquivo
 void send_file_path(int socket_fd, message_t *message, char *file_path, int verbose)
 {
     verbose_printf(verbose, "Enviando caminho do arquivo...\n");
-    strncpy(message->buffer, file_path, BUFFER_SIZE - 1); // Copia o caminho para o buffer
-    message->buffer[BUFFER_SIZE - 1] = '\0'; // Garante a terminação do buffer
-    send_message(socket_fd, message); // Envia o buffer
+    strncpy(message->buffer, file_path, BUFFER_SIZE - 1);
+    message->buffer[BUFFER_SIZE - 1] = '\0';
+    send_message(socket_fd, message);
 }
 
-// Envia o tamanho já transferido (offset) de um arquivo
+// envia o tamanho já transferido do arquivo
 void send_offset_size(int socket_fd, message_t *message, char *file_path, int verbose)
 {
     verbose_printf(verbose, "Enviando tamanho de offset...\n");
     char *file_path_with_part;
 
-    // Gera o caminho do arquivo parcial
     get_part_file_path(file_path, &file_path_with_part);
 
-    // Obtém o tamanho do arquivo parcial
     long size = get_size_file(file_path_with_part, verbose);
 
-    // Converte o tamanho em string
     char size_str[8];
     sprintf(size_str, "%ld", size);
 
-    // Copia o tamanho para o buffer
     strncpy(message->buffer, size_str, sizeof(size_str));
     message->buffer[sizeof(size_str)] = '\0';
 
-    free(file_path_with_part); // Libera memória do caminho parcial
-    send(socket_fd, message->buffer, strlen(message->buffer), 0); // Envia o buffer
+    free(file_path_with_part);
+    send(socket_fd, message->buffer, strlen(message->buffer), 0);
 }
 
-// Envia um arquivo para o servidor
+// envia arquivo para o servidor
 int send_file(int socket_fd, message_t *message, char *file_path_origin, int verbose)
 {
     verbose_printf(verbose, "Enviando arquivo...\n");
     char *abs_path;
 
-    // Obtém o caminho absoluto do arquivo
     if (get_abs_path(file_path_origin, &abs_path, verbose) == -1)
     {
         perror("Caminho do arquivo inválido.");
@@ -116,7 +103,7 @@ int send_file(int socket_fd, message_t *message, char *file_path_origin, int ver
 
     FILE *file = fopen(abs_path, "r");
     fseek(file, 0, SEEK_END);
-    long size = ftell(file); // Obtém o tamanho do arquivo
+    long size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
     if (file == NULL)
@@ -125,7 +112,6 @@ int send_file(int socket_fd, message_t *message, char *file_path_origin, int ver
         return -1;
     }
 
-    // Retoma o envio a partir do offset, se necessário
     if (strcmp(message->buffer, file_path_origin) != 0)
     {
         verbose_printf(verbose, "Retomando do offset de %s bytes\n", message->buffer);
@@ -137,7 +123,6 @@ int send_file(int socket_fd, message_t *message, char *file_path_origin, int ver
     {
         size_t len = strlen(message->buffer);
 
-        // Adiciona o marcador de EOF se necessário
         if (len < BUFFER_SIZE - 1)
         {
             message->buffer[len] = EOF_MARKER;
@@ -145,10 +130,8 @@ int send_file(int socket_fd, message_t *message, char *file_path_origin, int ver
             eof = 1;
         }
 
-        // Envia o conteúdo do buffer
         send_message(socket_fd, message);
 
-        // Exibe progresso, se verboso
         if (verbose)
         {
             static time_t last_time = 0;
@@ -162,7 +145,6 @@ int send_file(int socket_fd, message_t *message, char *file_path_origin, int ver
         }
     }
 
-    // Envia EOF explicitamente se não enviado
     if (!eof)
     {
         char eof_marker = EOF;
@@ -176,11 +158,12 @@ int send_file(int socket_fd, message_t *message, char *file_path_origin, int ver
 
     verbose_printf(verbose, "100.00%%\n");
 
-    fclose(file); // Fecha o arquivo
-    free(abs_path); // Libera memória do caminho absoluto
+    fclose(file);
+    free(abs_path);
     return 0;
 }
 
+// processa mensagem recebida do servidor e verifica erros comuns
 int handle_receive_message(int socket_fd, char *buffer)
 {
     int valread = recv(socket_fd, buffer, BUFFER_SIZE, 0);
@@ -204,13 +187,13 @@ int handle_receive_message(int socket_fd, char *buffer)
 
     if (strcmp(buffer, FILE_NOT_FOUND_EXCEPTION) == 1)
     {
-        perror("Arquivo não encontrado."); 
+        perror("Arquivo não encontrado.");
         return -1;
     }
     return valread;
 }
 
-// Exibe mensagens se o modo verboso estiver ativado
+// exibe mensagens se o modo verboso estiver ativado
 void verbose_printf(int verbose, const char *format, ...)
 {
     if (verbose)
