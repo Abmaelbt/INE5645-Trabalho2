@@ -26,7 +26,7 @@ void parse_arguments(const char *arg, char **host, char **file_path)
     }
 }
 
-// gerencia o recebimento de arquivos do servidor
+// gerencia o recebimento de arquivos do servidor (download)
 int receive_file(int socket_fd, message_t *message, int verbose)
 {
     verbose_printf(verbose, "recebendo arquivo\n");

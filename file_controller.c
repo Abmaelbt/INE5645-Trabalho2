@@ -7,7 +7,7 @@
 // obtem o caminho absoluto a partir do diretorio atual
 int get_abs_path(char *file_path, char **abs_path, int verbose)
 {
-    char *cwd = getcwd(NULL, 0); // obtém o diretorio de trabalho atual
+    char *cwd = getcwd(NULL, 0); // obtem o diretorio de trabalho atual
     if (cwd == NULL)
     {
         perror("Erro ao obter o diretório de trabalho atual."); 

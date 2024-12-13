@@ -11,6 +11,8 @@
 #include "file_controller.h"
 #include "socket.h"
 
+
+// TODO incorporar essa função dentro da main
 // encerra processos que utilizam a porta especificada
 void kill_process_on_port(int port)
 {
@@ -33,12 +35,12 @@ void kill_process_on_port(int port)
     }
     else
     {
-        printf("processos usando a porta %d foram finalizados\n", port); 
+        printf("servidor rodando na porta %d \n", port); 
     }
 }
 
 int verbose = 0;       
-int MAX_CLIENTS = 2;   
+int MAX_CLIENTS = 5;   
 int MAX_THROTTLE = 300; 
 int THROTTLING_TIME = 100000; 
 
@@ -204,6 +206,8 @@ int main(int argc, char const *argv[])
     poolfd[0].fd = socket_fd; 
     poolfd[0].events = POLLIN;
 
+    printf("Aguardando conexões...\n");
+
     while (1)
     {
         activity = poll(poolfd, MAX_CLIENTS + 1, -1); 
@@ -230,7 +234,8 @@ int main(int argc, char const *argv[])
             }
             else
             {
-                client_count++; 
+                client_count++;
+                verbose_printf(verbose, "Nova conexão aceita, socket fd: %d\n", new_socket);
             }
 
             for (int i = 1; i <= MAX_CLIENTS; i++)
@@ -253,6 +258,7 @@ int main(int argc, char const *argv[])
             #pragma omp critical
             if (request_count >= MAX_THROTTLE) 
             {
+                verbose_printf(verbose, "aplicando limitação...\n");
                 usleep(THROTTLING_TIME);
                 break_flag = 1;
             }
