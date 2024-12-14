@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/time.h>
-#include "file_controller.h"
+#include "header.h"
 
 // Obtém o caminho absoluto de um arquivo a partir do diretório atual
 int get_abs_path(char *file_path, char **abs_path, int verbose)
