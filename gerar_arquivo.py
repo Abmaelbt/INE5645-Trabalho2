@@ -16,8 +16,8 @@ def generate_random_text_file(filename, size_in_kb):
     print(f"Arquivo '{filename}' criado com sucesso com {os.path.getsize(filename)} bytes.")
 
 # Nome do arquivo e tamanho desejado
-output_file = "arquivo_100KB.txt"
-size_in_kb = 100
+output_file = "1MB.txt"
+size_in_kb = 1
 
 generate_random_text_file(output_file, size_in_kb)
 
