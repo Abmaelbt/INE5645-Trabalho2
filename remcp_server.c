@@ -7,80 +7,89 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <omp.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <omp.h>
 #include <time.h>
+#include <string.h>
 #include "file_controller.h"
-#include "socket.h"
+// #include "socket.h"
 
 
-// TODO incorporar essa função dentro da main
-// encerra processos que utilizam a porta especificada
+
+// Finaliza qualquer processo que esteja usando a porta especificada
 void kill_process_on_port(int port)
 {
     char command[128];
 
+    // Constrói o comando para finalizar o processo na porta especificada
 #ifdef __linux__
-    snprintf(command, sizeof(command), "fuser -k %d/tcp", port); 
+    snprintf(command, sizeof(command), "fuser -k %d/tcp", port); // Comando para Linux
 #elif __APPLE__
-    snprintf(command, sizeof(command), "lsof -ti:%d | xargs kill -9", port); 
+    snprintf(command, sizeof(command), "lsof -ti:%d | xargs kill -9", port); // Comando para macOS
 #elif _WIN32
-    snprintf(command, sizeof(command), "netstat -ano | findstr :%d > pid.txt && for /f \"tokens=5\" %%a in (pid.txt) do taskkill /PID %%a /F", port); 
+    snprintf(command, sizeof(command), "netstat -ano | findstr :%d > pid.txt && for /f \"tokens=5\" %%a in (pid.txt) do taskkill /PID %%a /F", port); // Comando para Windows
 #else
-    fprintf(stderr, "sistema operacional não suportado\n"); 
+    fprintf(stderr, "Sistema operacional não suportado.\n"); 
     return;
 #endif
 
+    // Executa o comando
     if (system(command) == -1)
     {
-        perror("falha ao finalizar processo na porta"); 
+        perror("Falha ao finalizar processo na porta."); 
     }
     else
     {
-        printf("servidor rodando na porta %d \n", port); 
+        printf("Processos usando a porta %d foram finalizados.\n", port); 
     }
 }
 
-int verbose = 0;       
-int MAX_CLIENTS = 5;   
-int MAX_THROTTLE = 300; 
-int THROTTLING_TIME = 100000; 
+int verbose = 0;       // Controle de verbosidade
+int MAX_CLIENTS = 2;   // Número máximo de clientes simultâneos
+int MAX_THROTTLE = 300; // Taxa máxima de requisições permitidas
+int THROTTLING_TIME = 100000; // Tempo de espera em caso de limitação (em microssegundos)
 
-// processa mensagens recebidas e realiza upload ou download de arquivos
+// Processa o buffer recebido e executa a operação correspondente (upload/download)
 int handle_buffer(char *buffer, int valread, int socket_fd, message_t *message, int verbose)
 {
-    buffer[valread] = '\0'; 
+    buffer[valread] = '\0'; // Adiciona o caractere nulo ao final do buffer
 
+    // Determina se é uma operação de upload ou download
     if (message->upload == -1)
     {
-        message->upload = atoi(buffer); 
-        send(socket_fd, buffer, strlen(buffer), 0); 
+        message->upload = atoi(buffer); // Define o modo de operação
+        send(socket_fd, buffer, strlen(buffer), 0); // Confirma para o cliente
     }
     else if (message->file_path == NULL)
     {
-        message->file_path = strdup(buffer); 
+        message->file_path = strdup(buffer); // Armazena o caminho do arquivo enviado pelo cliente
 
         if (message->upload)
         {
-            send_offset_size(socket_fd, message, message->file_path, verbose); 
+            send_offset_size(socket_fd, message, message->file_path, verbose); // Envia o tamanho do arquivo existente
         }
         else
         {
-            send(socket_fd, buffer, strlen(buffer), 0); 
+            send(socket_fd, buffer, strlen(buffer), 0); // Confirma o recebimento do caminho do arquivo
         }
     }
     else if (message->upload)
     {
+        // Escreve os dados recebidos no arquivo
         if (handle_write_part_file(buffer, valread, message, verbose) == -1)
         {
-            perror("caminho do arquivo inválido"); 
+            perror("Caminho do arquivo inválido."); 
             return 0;
         }
-        send(socket_fd, buffer, strlen(buffer), 0); 
+        send(socket_fd, buffer, strlen(buffer), 0); // Confirmação para o cliente
     }
     else
     {
+        // Envia o arquivo solicitado pelo cliente
         if (send_file(socket_fd, message, message->file_path, verbose) == -1)
         {
-            perror("arquivo não encontrado"); 
+            perror("Arquivo não encontrado."); 
             return 0;
         }
     }
@@ -88,7 +97,7 @@ int handle_buffer(char *buffer, int valread, int socket_fd, message_t *message, 
     return 0;
 }
 
-// gerencia a atividade de mensagens de clientes conectados
+// Gerencia a atividade de mensagens de clientes conectados
 int handle_message_activity(message_t *message, struct pollfd *poolfd, int *client_count, int *request_count)
 {
     int *socket_fd = &poolfd->fd;
@@ -96,20 +105,23 @@ int handle_message_activity(message_t *message, struct pollfd *poolfd, int *clie
 
     if (*socket_fd != -1 && (poolfd->revents & POLLIN))
     {
-        int valread = read(*socket_fd, buffer, BUFFER_SIZE); 
+        int valread = read(*socket_fd, buffer, BUFFER_SIZE); // Lê dados do cliente
         if (valread == 0)
         {
+            printf("Cliente no socket %d desconectado.\n", *socket_fd); 
             close(*socket_fd);
             *socket_fd = -1;
             message->upload = -1;
             message->file_path = NULL;
             memset(message->buffer, 0, BUFFER_SIZE);
 
+            // Reduz o contador de clientes em um bloco crítico
             #pragma omp critical
             (*client_count)--;
             return 0;
         }
 
+        // Incrementa o contador de requisições em um bloco crítico
         #pragma omp critical
         (*request_count)++;
         return handle_buffer(buffer, valread, *socket_fd, message, verbose);
@@ -117,7 +129,7 @@ int handle_message_activity(message_t *message, struct pollfd *poolfd, int *clie
     return 0;
 }
 
-// reseta o contador de requisições periodicamente
+// Reseta o contador de requisições a cada segundo
 void reset_request_count(int *request_count)
 {
     static time_t last_time = 0;
@@ -126,45 +138,46 @@ void reset_request_count(int *request_count)
     {
         #pragma omp critical
         {
-            *request_count = 0; 
+            verbose_printf(verbose, "Taxa de requisições: %d\n", *request_count); 
+            *request_count = 0; // Reseta o contador
         }
         last_time = current_time;
     }
 }
 
-// processa os argumentos da linha de comando para configuração do servidor
+// Processa os argumentos de linha de comando para configurar o servidor
 void parse_arguments(int argc, char const *argv[])
 {
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "-v") == 0)
         {
-            verbose = 1; 
+            verbose = 1; // Ativa o modo verboso
         }
         else if (strncmp(argv[i], "--max-clients=", 14) == 0)
         {
-            MAX_CLIENTS = atoi(argv[i] + 14); 
+            MAX_CLIENTS = atoi(argv[i] + 14); // Define o número máximo de clientes
         }
         else if (strncmp(argv[i], "--max-throttle=", 15) == 0)
         {
-            MAX_THROTTLE = atoi(argv[i] + 15); 
+            MAX_THROTTLE = atoi(argv[i] + 15); // Define a taxa máxima de requisições
         }
         else if (strncmp(argv[i], "--throttling-time=", 18) == 0)
         {
-            THROTTLING_TIME = atoi(argv[i] + 18); 
+            THROTTLING_TIME = atoi(argv[i] + 18); // Define o tempo de espera para limitação
         }
         else
         {
-            fprintf(stderr, "argumento desconhecido: %s\n", argv[i]); 
+            fprintf(stderr, "Argumento desconhecido: %s\n", argv[i]); 
         }
     }
 }
 
-// função principal do servidor
+// Função principal do servidor
 int main(int argc, char const *argv[])
 {
-    kill_process_on_port(PORT); 
-    omp_set_nested(1); 
+    kill_process_on_port(PORT); // Libera a porta para uso
+    omp_set_nested(1); // Ativa suporte a threads aninhadas no OpenMP
 
     int socket_fd, new_socket;
     struct sockaddr_in address;
@@ -175,26 +188,31 @@ int main(int argc, char const *argv[])
     int client_count = 0;
     int request_count = 0;
 
-    parse_arguments(argc, argv); 
-    create_socket(&socket_fd, &address, NULL); 
+    printf("Uso: ./main [-v] [--max-clients=x] [--max-throttle=x] [--throttling-time=x]\n"); 
+    parse_arguments(argc, argv); // Processa argumentos da linha de comando
 
-    struct linger so_linger = {1, 0}; 
+    create_socket(&socket_fd, &address, NULL); // Cria o socket principal
+
+    struct linger so_linger = {1, 0}; // Configura para fechar imediatamente o socket
     setsockopt(socket_fd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
 
+    // Associa o socket à porta e endereço especificados
     if (bind(socket_fd, (struct sockaddr *)&address, sizeof(address)) < 0)
     {
-        perror("falha ao associar o socket"); 
+        perror("Falha ao associar o socket."); 
         close(socket_fd);
         exit(EXIT_FAILURE);
     }
 
+    // Prepara o socket para aceitar conexões
     if (listen(socket_fd, 3) < 0)
     {
-        perror("falha ao escutar no socket"); 
+        perror("Falha ao escutar no socket."); 
         close(socket_fd);
         exit(EXIT_FAILURE);
     }
 
+    // Inicializa os descritores e buffers de clientes
     for (int i = 0; i <= MAX_CLIENTS; i++)
     {
         poolfd[i].fd = -1;
@@ -203,41 +221,47 @@ int main(int argc, char const *argv[])
         messages[i].buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
     }
 
-    poolfd[0].fd = socket_fd; 
+    poolfd[0].fd = socket_fd; // Adiciona o socket principal ao pool
     poolfd[0].events = POLLIN;
 
-    printf("Aguardando conexões...\n");
+    printf("Aguardando conexões...\n"); 
 
+    // Loop principal do servidor
     while (1)
     {
-        activity = poll(poolfd, MAX_CLIENTS + 1, -1); 
+        activity = poll(poolfd, MAX_CLIENTS + 1, -1); // Monitora atividade nos sockets
 
         if (activity < 0)
         {
-            perror("erro ao monitorar os sockets"); 
+            perror("Erro ao monitorar os sockets."); 
             close(socket_fd);
             exit(EXIT_FAILURE);
         }
 
+        // Nova conexão
         if (poolfd[0].revents & POLLIN)
         {
             new_socket = accept(socket_fd, (struct sockaddr *)&address, (socklen_t *)&addrlen);
+            verbose_printf(verbose, "Clientes conectados: %d\n", client_count); 
             if (new_socket < 0)
             {
-                perror("falha ao aceitar conexão"); 
+                perror("Falha ao aceitar conexão."); 
                 continue;
             }
 
+            // Verifica se o limite de clientes foi atingido
             if (client_count >= MAX_CLIENTS)
             {
+                verbose_printf(verbose, "Conexão rejeitada: Limite de clientes atingido.\n"); 
                 close(new_socket);
             }
             else
             {
-                client_count++;
-                verbose_printf(verbose, "Nova conexão aceita, socket fd: %d\n", new_socket);
+                client_count++; // Incrementa o contador de clientes
+                verbose_printf(verbose, "Nova conexão aceita, socket fd: %d\n", new_socket); 
             }
 
+            // Adiciona o novo socket ao pool
             for (int i = 1; i <= MAX_CLIENTS; i++)
             {
                 if (poolfd[i].fd == -1)
@@ -249,16 +273,17 @@ int main(int argc, char const *argv[])
             }
         }
 
-        reset_request_count(&request_count); 
+        reset_request_count(&request_count); // Reseta o contador de requisições
 
+        // Processa atividade de cada cliente
         #pragma omp parallel for schedule(static, 1)
         for (int i = 1; i <= MAX_CLIENTS; i++)
         {
             int break_flag = 0;
             #pragma omp critical
-            if (request_count >= MAX_THROTTLE) 
+            if (request_count >= MAX_THROTTLE) // Verifica limitação de requisições
             {
-                verbose_printf(verbose, "aplicando limitação...\n");
+                verbose_printf(verbose, "Aplicando limitação...\n"); 
                 usleep(THROTTLING_TIME);
                 break_flag = 1;
             }
@@ -273,6 +298,6 @@ int main(int argc, char const *argv[])
         }
     }
 
-    close(socket_fd); 
+    close(socket_fd); // Fecha o socket principal
     return 0;
 }
