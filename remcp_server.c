@@ -10,49 +10,48 @@
 #include <time.h>
 #include "header.h"
 
-int MAX_CLIENTS = 2;   // Número máximo de clientes simultâneos
-int MAX_THROTTLE = 300; // Taxa máxima de requisições permitidas
-int THROTTLING_TIME = 100000; // Tempo de espera em caso de limitação (em microssegundos)
+int MAX_CLIENTS = 1;   // numero maximo de clientes simultaneos
+int MAX_THROTTLE = 300; // taxa maxima de requisicoes permitidas
+int THROTTLING_TIME = 100000; // tempo de espera em caso de limitacao (em microssegundos)
 
-// upload ou download
-int handle_buffer(char *buffer, int valread, int socket_fd, message_t *message)
+int client_handler(char *buffer, int valread, int socket_fd, message_t *message)
 {
     buffer[valread] = '\0';
 
-    // Determina se é uma operação de upload ou download
+    // determina se download ou upload
     if (message->upload == -1)
     {
         message->upload = atoi(buffer);
-        send(socket_fd, buffer, strlen(buffer), 0); //Confirmar para o cliente
+        send(socket_fd, buffer, strlen(buffer), 0); // confirmar para o cliente
     }
     else if (message->file_path == NULL)
     {
-        message->file_path = strdup(buffer); //Caminho do arquivo enviado pelo cliente
+        message->file_path = strdup(buffer); // caminho do arquivo enviado pelo cliente
 
         if (message->upload)
         {
-            send_offset_size(socket_fd, message, message->file_path); //Total do arquivo
+            send_offset_size(socket_fd, message, message->file_path); // total do arquivo
         }
         else
         {
-            send(socket_fd, buffer, strlen(buffer), 0); //Conformar recebimento do tamanho do arquivo
+            send(socket_fd, buffer, strlen(buffer), 0); // confirmar recebimento do tamanho do arquivo
         }
     }
     else if (message->upload)
     {
         if (handle_write_part_file(buffer, valread, message) == -1)
         {
-            perror("Caminho do arquivo inválido."); 
+            perror("caminho do arquivo invalido."); 
             return 0;
         }
-        send(socket_fd, buffer, strlen(buffer), 0); //Confirmação para o cliente
+        send(socket_fd, buffer, strlen(buffer), 0); // confirmacao para o cliente
     }
     else
     {
-        //Envia o arquivo solicitado pelo cliente
+        // envia o arquivo solicitado pelo cliente
         if (send_file(socket_fd, message, message->file_path) == -1)
         {
-            perror("Arquivo não encontrado."); 
+            perror("arquivo nao encontrado."); 
             return 0;
         }
     }
@@ -60,7 +59,7 @@ int handle_buffer(char *buffer, int valread, int socket_fd, message_t *message)
     return 0;
 }
 
-//Função de controle de mensagens para clientes conectados
+// controla as mensagens para os clientes conectados
 int handle_message_activity(message_t *message, struct pollfd *poolfd, int *client_count, int *request_count)
 {
     int *socket_fd = &poolfd->fd;
@@ -71,7 +70,7 @@ int handle_message_activity(message_t *message, struct pollfd *poolfd, int *clie
         int valread = read(*socket_fd, buffer, BUFFER_SIZE);
         if (valread == 0)
         {
-            printf("Cliente no socket %d desconectado.\n", *socket_fd); 
+            printf("cliente no socket %d desconectado.\n", *socket_fd); 
             close(*socket_fd);
             *socket_fd = -1;
             message->upload = -1;
@@ -85,16 +84,16 @@ int handle_message_activity(message_t *message, struct pollfd *poolfd, int *clie
 
         #pragma omp critical
         {
-            (*request_count)++; // Contador global
-            message->request_count++; // Contador do cliente
+            (*request_count)++; // contador global
+            message->request_count++; // contador do cliente
         }
 
-        return handle_buffer(buffer, valread, *socket_fd, message);
+        return client_handler(buffer, valread, *socket_fd, message);
     }
     return 0;
 }
 
-//Reseta o contador de requisições a cada segundo
+// reseta o contador de requisicoes a cada segundo
 void reset_request_count(int *request_count, struct pollfd *poolfd, message_t *messages, int max_clients)
 {
     static time_t last_time = 0;
@@ -104,25 +103,24 @@ void reset_request_count(int *request_count, struct pollfd *poolfd, message_t *m
     {
         #pragma omp critical
         {
-            printf("Taxa total de requisições por segundo: %d\n", *request_count); //Taxa de requisições total 
+            printf("taxa total de requisicoes por segundo: %d\n", *request_count); // taxa de requisicoes total 
 
-            //Taxa de requisições para cada socket
+            // taxa de requisicoes para cada socket
             for (int i = 1; i <= max_clients; i++)
             {
-                if (poolfd[i].fd != -1) //Verifica se o socket está ativo
+                if (poolfd[i].fd != -1) // verifica se o socket esta ativo
                 {
-                    printf("Socket %d: enviou %d requisições neste intervalo.\n",
+                    printf("socket %d: enviou %d requisicoes neste intervalo.\n",
                            poolfd[i].fd, messages[i].request_count);
-                    messages[i].request_count = 0; //Reseta o contador por cliente
+                    messages[i].request_count = 0; // reseta o contador por cliente
                 }
             }
 
-            *request_count = 0; //Reseta o contador global de requisições
+            *request_count = 0; // reseta o contador global de requisicoes
         }
         last_time = current_time;
     }
 }
-
 
 void parse_arguments(int argc, char const *argv[])
 {
@@ -130,26 +128,26 @@ void parse_arguments(int argc, char const *argv[])
     {
         if (strncmp(argv[i], "--max-clients=", 14) == 0)
         {
-            MAX_CLIENTS = atoi(argv[i] + 14); //Definir o máximo de clientes
+            MAX_CLIENTS = atoi(argv[i] + 14);
         }
         else if (strncmp(argv[i], "--max-throttle=", 15) == 0)
         {
-            MAX_THROTTLE = atoi(argv[i] + 15); //Definir o máximo de req
+            MAX_THROTTLE = atoi(argv[i] + 15);
         }
         else if (strncmp(argv[i], "--throttling-time=", 18) == 0)
         {
-            THROTTLING_TIME = atoi(argv[i] + 18); //Define o tempo de espera para limitação
+            THROTTLING_TIME = atoi(argv[i] + 18);
         }
         else
         {
-            fprintf(stderr, "Argumento desconhecido: %s\n", argv[i]); 
+            fprintf(stderr, "argumento desconhecido: %s\n", argv[i]); 
         }
     }
 }
 
 int main(int argc, char const *argv[])
 {
-    omp_set_nested(1); // Ativa suporte a threads aninhadas no OpenMP
+    omp_set_nested(1); // ativa suporte a threads aninhadas no openmp
 
     int socket_fd, new_socket;
     struct sockaddr_in address;
@@ -160,31 +158,29 @@ int main(int argc, char const *argv[])
     int client_count = 0;
     int request_count = 0;
 
-    printf("Uso: ./remcp_server [--max-clients=x] [--max-throttle=x] [--throttling-time=x]\n"); 
+    printf("uso: ./remcp_server [--max-clients=x] [--max-throttle=x] [--throttling-time=x]\n"); 
     parse_arguments(argc, argv); 
 
-    create_socket(&socket_fd, &address, NULL); //Cria o main socket
-
+    define_socket(&socket_fd, &address, NULL); // cria o socket principal
     struct linger so_linger = {1, 0};
     setsockopt(socket_fd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
 
-    //Associar o socket à porta e endereço especificados
+    // associa o socket ao endereco ip e porta
     if (bind(socket_fd, (struct sockaddr *)&address, sizeof(address)) < 0)
     {
-        perror("Falha ao associar o socket."); 
+        perror("falha ao associar o socket."); 
         close(socket_fd);
         exit(EXIT_FAILURE);
     }
-
 
     if (listen(socket_fd, 3) < 0)
     {
-        perror("Falha ao escutar no socket."); 
+        perror("falha ao escutar no socket."); 
         close(socket_fd);
         exit(EXIT_FAILURE);
     }
 
-    //Inicializar os descritores e buffers de clientes
+    // inicializar os descritores e buffers de clientes
     for (int i = 0; i <= MAX_CLIENTS; i++)
     {
         poolfd[i].fd = -1;
@@ -193,46 +189,46 @@ int main(int argc, char const *argv[])
         messages[i].buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
     }
 
-    poolfd[0].fd = socket_fd; // Adiciona o socket principal ao pool
+    poolfd[0].fd = socket_fd; // adiciona o socket principal ao pool
     poolfd[0].events = POLLIN;
 
-    printf("Aguardando conexões...\n"); 
+    printf("aguardando conexoes...\n"); 
 
     while (1)
     {
-        activity = poll(poolfd, MAX_CLIENTS + 1, -1); // Monitora atividade nos sockets
+        activity = poll(poolfd, MAX_CLIENTS + 1, -1); // monitora atividade nos sockets
 
         if (activity < 0)
         {
-            perror("Erro ao monitorar os sockets."); 
+            perror("erro ao monitorar os sockets."); 
             close(socket_fd);
             exit(EXIT_FAILURE);
         }
 
-        //Nova conexão
+        // nova conexao
         if (poolfd[0].revents & POLLIN)
         {
             new_socket = accept(socket_fd, (struct sockaddr *)&address, (socklen_t *)&addrlen);
-            printf("Clientes conectados: %d\n", client_count); 
+            printf("clientes conectados: %d\n", client_count); 
             if (new_socket < 0)
             {
-                perror("Falha ao aceitar conexão."); 
+                perror("falha ao aceitar conexao."); 
                 continue;
             }
 
-            //Verificar se o limite de clientes foi atingido
+            // verificar se o limite de clientes foi atingido
             if (client_count >= MAX_CLIENTS)
             {
-                printf("Conexão rejeitada: Limite de clientes atingido.\n"); 
+                printf("conexao rejeitada: limite de clientes atingido.\n"); 
                 close(new_socket);
             }
             else
             {
                 client_count++;
-                printf("Nova conexão aceita, socket fd: %d\n", new_socket); 
+                printf("nova conexao aceita, socket fd: %d\n", new_socket); 
             }
 
-            //Adicionar o novo socket ao pool
+            // adicionar o novo socket ao pool
             for (int i = 1; i <= MAX_CLIENTS; i++)
             {
                 if (poolfd[i].fd == -1)
@@ -246,7 +242,7 @@ int main(int argc, char const *argv[])
 
         reset_request_count(&request_count, poolfd, messages, MAX_CLIENTS);
 
-        //Processar a atividade de cada cliente
+        // processar a atividade de cada cliente
         #pragma omp parallel for schedule(static, 1)
         for (int i = 1; i <= MAX_CLIENTS; i++)
         {
@@ -254,7 +250,7 @@ int main(int argc, char const *argv[])
             #pragma omp critical
             if (request_count >= MAX_THROTTLE)
             {
-                printf("Aplicando limitação...\n"); 
+                printf("aplicando limitacao...\n"); 
                 usleep(THROTTLING_TIME);
                 break_flag = 1;
             }

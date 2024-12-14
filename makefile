@@ -12,8 +12,9 @@ clean:
 	rm -f $(SERVER_BIN) $(CLIENT_BIN)
 
 run-server: $(SERVER_BIN)
-	./$(SERVER_BIN) -v
+	./$(SERVER_BIN)
 
 help:
 	@echo "  make            - Compila o servidor e o cliente."
+	@echo "  make clean      - Exclui os executaveis"
 	@echo "  make run-server - Executa o servidor."
