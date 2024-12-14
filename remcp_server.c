@@ -15,36 +15,8 @@
 #include "file_controller.h"
 #include "socket.h"
 
-// Finaliza qualquer processo que esteja usando a porta especificada
-void kill_process_on_port(int port)
-{
-    char command[128];
-
-    // Constrói o comando para finalizar o processo na porta especificada
-#ifdef __linux__
-    snprintf(command, sizeof(command), "fuser -k %d/tcp", port); // Comando para Linux
-#elif __APPLE__
-    snprintf(command, sizeof(command), "lsof -ti:%d | xargs kill -9", port); // Comando para macOS
-#elif _WIN32
-    snprintf(command, sizeof(command), "netstat -ano | findstr :%d > pid.txt && for /f \"tokens=5\" %%a in (pid.txt) do taskkill /PID %%a /F", port); // Comando para Windows
-#else
-    fprintf(stderr, "Sistema operacional não suportado.\n"); 
-    return;
-#endif
-
-    // Executa o comando
-    if (system(command) == -1)
-    {
-        perror("Falha ao finalizar processo na porta."); 
-    }
-    else
-    {
-        printf("Processos usando a porta %d foram finalizados.\n", port); 
-    }
-}
-
 int verbose = 0;       // Controle de verbosidade
-int MAX_CLIENTS = 2;   // Número máximo de clientes simultâneos
+int MAX_CLIENTS = 3;   // Número máximo de clientes simultâneos
 int MAX_THROTTLE = 300; // Taxa máxima de requisições permitidas
 int THROTTLING_TIME = 100000; // Tempo de espera em caso de limitação (em microssegundos)
 
@@ -121,27 +93,45 @@ int handle_message_activity(message_t *message, struct pollfd *poolfd, int *clie
 
         // Incrementa o contador de requisições em um bloco crítico
         #pragma omp critical
-        (*request_count)++;
+        {
+            (*request_count)++; // Contador global
+            message->request_count++; // Contador do cliente
+        }
+
         return handle_buffer(buffer, valread, *socket_fd, message, verbose);
     }
     return 0;
 }
 
 // Reseta o contador de requisições a cada segundo
-void reset_request_count(int *request_count)
+void reset_request_count(int *request_count, struct pollfd *poolfd, message_t *messages, int max_clients, int verbose)
 {
     static time_t last_time = 0;
     time_t current_time = time(NULL);
+
     if (current_time - last_time >= 1)
     {
         #pragma omp critical
         {
-            verbose_printf(verbose, "Taxa de requisições: %d\n", *request_count); 
-            *request_count = 0; // Reseta o contador
+            verbose_printf(verbose, "Taxa total de requisições por segundo: %d\n", *request_count);
+
+            // Mostra a taxa de requisições por cliente conectado
+            for (int i = 1; i <= max_clients; i++)
+            {
+                if (poolfd[i].fd != -1) // Verifica se o socket está ativo
+                {
+                    verbose_printf(verbose, "Socket %d: enviou %d requisições neste intervalo.\n",
+                                   poolfd[i].fd, messages[i].request_count);
+                    messages[i].request_count = 0; // Reseta o contador por cliente
+                }
+            }
+
+            *request_count = 0; // Reseta o contador global de requisições
         }
         last_time = current_time;
     }
 }
+
 
 // Processa os argumentos de linha de comando para configurar o servidor
 void parse_arguments(int argc, char const *argv[])
@@ -174,7 +164,6 @@ void parse_arguments(int argc, char const *argv[])
 // Função principal do servidor
 int main(int argc, char const *argv[])
 {
-    kill_process_on_port(PORT); // Libera a porta para uso
     omp_set_nested(1); // Ativa suporte a threads aninhadas no OpenMP
 
     int socket_fd, new_socket;
@@ -186,7 +175,7 @@ int main(int argc, char const *argv[])
     int client_count = 0;
     int request_count = 0;
 
-    printf("Uso: ./main [-v] [--max-clients=x] [--max-throttle=x] [--throttling-time=x]\n"); 
+    printf("Uso: ./remcp_server [-v] [--max-clients=x] [--max-throttle=x] [--throttling-time=x]\n"); 
     parse_arguments(argc, argv); // Processa argumentos da linha de comando
 
     create_socket(&socket_fd, &address, NULL); // Cria o socket principal
@@ -271,7 +260,7 @@ int main(int argc, char const *argv[])
             }
         }
 
-        reset_request_count(&request_count); // Reseta o contador de requisições
+        reset_request_count(&request_count, poolfd, messages, MAX_CLIENTS, verbose);
 
         // Processa atividade de cada cliente
         #pragma omp parallel for schedule(static, 1)

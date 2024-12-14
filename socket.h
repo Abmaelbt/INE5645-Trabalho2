@@ -3,17 +3,6 @@
 
 #include <arpa/inet.h>
 
-// Tradução das mensagens de erro para português
-#define FAILED_TO_SEND_MESSAGE_EXCEPTION "Falha ao enviar mensagem. [0100]\n"
-#define SOCKET_CREATE_EXCEPTION "Falha ao criar socket. [0101]\n"
-#define SOCKET_BIND_EXCEPTION "Falha ao associar socket. [0102]\n"
-#define SOCKET_LISTEN_EXCEPTION "Falha ao escutar no socket. [0103]\n"
-#define POOL_EXCEPTION "Falha ao usar poll no socket. [0104]\n"
-#define ACCEPT_EXCEPTION "Falha ao aceitar conexão. [0105]\n"
-#define CONNECTION_EXCEPTION "Falha ao conectar ao servidor. [0106]\n"
-#define SERVER_CLOSED_EXCEPTION "Servidor encerrou a conexão. [0107]\n"
-#define FAILED_TO_RECEIVE_MESSAGE_EXCEPTION "Falha ao receber mensagem. [0108]\n"
-
 #define PORT 8080
 #define BUFFER_SIZE 128
 
@@ -23,6 +12,7 @@ typedef struct message_t
     char *file_path; // Caminho do arquivo associado à mensagem
     char *buffer;    // Buffer de dados da mensagem
     int upload;      // Indica se é upload (1) ou download (0)
+    int request_count; // Contador de requisições para o cliente
 } message_t;
 
 // Declaração de funções auxiliares para manipulação de sockets
