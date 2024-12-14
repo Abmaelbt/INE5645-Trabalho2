@@ -5,8 +5,8 @@ CLIENT_BIN = remcp
 
 
 all:
-	gcc -o remcp_server remcp_server.c -lpthread -fopenmp  file_controller.c
-	gcc -o remcp remcp.c file_controller.c
+	gcc -o remcp_server remcp_server.c -lpthread -fopenmp  header.c
+	gcc -o remcp remcp.c header.c
 
 clean:
 	rm -f $(SERVER_BIN) $(CLIENT_BIN)
