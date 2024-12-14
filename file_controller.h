@@ -11,13 +11,13 @@
 #define FILE_NOT_FOUND_EXCEPTION "File not found. [0001]\n"
 #define INVALID_FILE_PATH_EXCEPTION "Invalid file path. [0002]\n"
 
-int get_abs_path(char *file_path, char **abs_path, int verbose);
+int get_abs_path(char *file_path, char **abs_path);
 
 int get_part_file_path(char *file_path, char **file_path_with_part);
 
-int handle_write_part_file(char *buffer, int valread, message_t *client, int verbose);
+int handle_write_part_file(char *buffer, int valread, message_t *client);
 
-long get_size_file(char *file_path, int verbose);
+long get_size_file(char *file_path);
 
 int file_exists(char *file_path);
 

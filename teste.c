@@ -1,99 +1,126 @@
-int send_file(int socket_fd, message_t *message, char *file_path_origin, int verbose)
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include "file_controller.h"
+#include "socket.h"
+
+// Analisa os argumentos de entrada para separar host e caminho do arquivo
+void parse_arguments(const char *arg, char **host, char **file_path)
 {
-    verbose_printf(verbose, "Enviando arquivo...\n");
-    char *abs_path;
-
-    // Obtém o caminho absoluto do arquivo
-    if (get_abs_path(file_path_origin, &abs_path, verbose) == -1)
+    char *colon = strchr(arg, ':');
+    if (colon)
     {
-        perror("Caminho do arquivo inválido.");
-        return -1;
+        // Caso o argumento tenha host especificado, separa host e caminho
+        *host = strndup(arg, colon - arg);
+        *file_path = strdup(colon + 1);
     }
-
-    FILE *file = fopen(abs_path, "r");
-    if (file == NULL)
+    else
     {
-        perror("Arquivo não encontrado.");
-        free(abs_path);
-        return -1;
+        // Caso não tenha host, usa o localhost por padrão
+        *host = "127.0.0.1";
+        *file_path = strdup(arg);
     }
+}
 
-    // Obtém o tamanho total do arquivo
-    fseek(file, 0, SEEK_END);
-    long total_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    // Variável para armazenar o offset enviado pelo cliente
-    long offset = 0;
-    if (message->buffer[0] != '\0') // Se o buffer contiver dados
+// Gerencia o recebimento de arquivos do servidor
+int receive_file(int socket_fd, message_t *message)
+{
+    printf("Recebendo arquivo...\n");
+    while (1)
     {
-        offset = atol(message->buffer); // Converte o valor do buffer para o offset
-        if (offset < 0 || offset > total_size)
+        // Lê dados recebidos do servidor
+        int valread = handle_receive_message(socket_fd, message->buffer);
+
+        // Escreve a parte recebida no arquivo temporário
+        int result = handle_write_part_file(message->buffer, valread, message);
+
+        // Finaliza o recebimento se o arquivo estiver completo
+        if (result != 0)
         {
-            perror("Offset inválido recebido do cliente.");
-            fclose(file);
-            free(abs_path);
-            return -1;
+            return result;
         }
-        // Ajusta o ponteiro do arquivo para o offset
-        fseek(file, offset, SEEK_SET);
-        verbose_printf(verbose, "Retomando envio a partir do offset: %ld bytes\n", offset);
+        // Envia uma confirmação para o servidor
+        send(socket_fd, message->buffer, strlen(message->buffer), 0);
     }
+}
 
-    // Variáveis para medir progresso e taxa de transmissão
-    long bytes_sent = offset; // Inicializa com o offset
-    struct timeval start_time, current_time;
-    gettimeofday(&start_time, NULL);
-
-    int eof = 0;
-    while (fgets(message->buffer, BUFFER_SIZE, file) != NULL)
+int main(int argc, char const *argv[])
+{
+    // Verifica o número de argumentos passados
+    if (argc < 3 || argc > 4)
     {
-        size_t len = strlen(message->buffer);
-
-        // Adiciona o marcador de EOF se necessário
-        if (len < BUFFER_SIZE - 1)
-        {
-            message->buffer[len] = EOF_MARKER;
-            message->buffer[len + 1] = '\0';
-            eof = 1;
-        }
-
-        // Envia o conteúdo do buffer
-        send_message(socket_fd, message);
-        bytes_sent += len;
-
-        // Exibe taxa de transmissão e progresso se verboso
-        if (verbose)
-        {
-            gettimeofday(&current_time, NULL);
-            double elapsed_time = (current_time.tv_sec - start_time.tv_sec) +
-                                  (current_time.tv_usec - start_time.tv_usec) / 1000000.0;
-
-            if (elapsed_time > 0) // Evita divisão por zero
-            {
-                double rate = bytes_sent / elapsed_time; // Taxa de bytes por segundo
-                double progress = (bytes_sent / (double)total_size) * 100; // Progresso em %
-                printf("\rTaxa de transmissão: %.2f bytes/seg | Progresso: %.2f%%", rate, progress);
-                fflush(stdout);
-            }
-        }
+        printf("Uso: ./client [host:]caminho_origem [host:]caminho_destino\n");
+        return 1;
     }
 
-    if (!eof)
+    // Variáveis para armazenar informações dos caminhos e servidores
+    char *host_origin = NULL;
+    char *file_path_origin = NULL;
+    char *host_destination = NULL;
+    char *file_path_destination = NULL;
+    char *host_server = NULL;
+    int upload = 0;
+
+    // Analisa os argumentos fornecidos
+    parse_arguments(argv[1], &host_origin, &file_path_origin);
+    parse_arguments(argv[2], &host_destination, &file_path_destination);
+
+    // Determina se a operação é um upload
+    upload = strcmp(host_origin, "127.0.0.1") == 0;
+
+    // Define o servidor de destino
+    host_server = upload ? host_destination : host_origin;
+
+    int socket_fd;
+    struct sockaddr_in address;
+
+    // Cria e configura o socket
+    create_socket(&socket_fd, &address, host_server);
+
+    // Estabelece conexão com o servidor
+    if (connect(socket_fd, (struct sockaddr *)&address, sizeof(address)) < 0)
     {
-        // Envia EOF explicitamente se necessário
-        char eof_marker = EOF;
-        if (send(socket_fd, &eof_marker, 1, 0) == -1)
-        {
-            perror("Falha ao enviar EOF.");
-        }
-        verbose_printf(verbose, "\nEnviando EOF\n");
-        handle_receive_message(socket_fd, message->buffer);
+        perror("Falha ao conectar ao servidor.");
+        exit(EXIT_FAILURE);
     }
 
-    verbose_printf(verbose, "\nEnvio concluído. Total de bytes enviados: %ld\n", bytes_sent);
+    printf("Conexão estabelecida com o servidor...\n");
 
-    fclose(file); // Fecha o arquivo
-    free(abs_path); // Libera memória do caminho absoluto
+    // Aloca memória para a estrutura de mensagem
+    message_t *message = (message_t *)malloc(sizeof(message_t));
+    message->buffer = (char *)malloc(BUFFER_SIZE);
+    message->upload = upload;
+
+    //Gerencia o envio ou recebimento de arquivos
+    if (upload)
+    {
+        //Envio de arquivo
+        printf("Iniciando upload...\n");
+        send_upload(socket_fd, message);
+        send_file_path(socket_fd, message, file_path_destination);
+        send_file(socket_fd, message, file_path_origin);
+    }
+    else
+    {
+        //Recebimento de arquivo
+        printf("Iniciando download...\n");
+        send_upload(socket_fd, message);
+        send_file_path(socket_fd, message, file_path_origin);
+        message->file_path = file_path_destination;
+        send_offset_size(socket_fd, message, file_path_destination);
+        receive_file(socket_fd, message);
+    }
+
+    // Fecha o socket e libera memória alocada
+    close(socket_fd);
+    free(message->buffer);
+    free(message);
+
+    printf("Operação concluída.\n");
+
     return 0;
 }
