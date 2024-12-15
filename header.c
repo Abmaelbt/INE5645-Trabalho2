@@ -13,7 +13,6 @@
 
 
 
-// obtem o caminho absoluto de um arquivo a partir do diretorio atual
 void define_socket(int *socket_fd, struct sockaddr_in *address, char *host_destination)
 {
     struct timeval timeout;
