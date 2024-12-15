@@ -122,28 +122,6 @@ void reset_request_count(int *request_count, struct pollfd *poolfd, message_t *m
     }
 }
 
-void parse_arguments(int argc, char const *argv[])
-{
-    for (int i = 1; i < argc; i++)
-    {
-        if (strncmp(argv[i], "--max-clients=", 14) == 0)
-        {
-            MAX_CLIENTS = atoi(argv[i] + 14);
-        }
-        else if (strncmp(argv[i], "--max-throttle=", 15) == 0)
-        {
-            MAX_THROTTLE = atoi(argv[i] + 15);
-        }
-        else if (strncmp(argv[i], "--throttling-time=", 18) == 0)
-        {
-            THROTTLING_TIME = atoi(argv[i] + 18);
-        }
-        else
-        {
-            fprintf(stderr, "argumento desconhecido: %s\n", argv[i]); 
-        }
-    }
-}
 
 int main(int argc, char const *argv[])
 {
@@ -158,8 +136,6 @@ int main(int argc, char const *argv[])
     int client_count = 0;
     int request_count = 0;
 
-    printf("uso: ./remcp_server [--max-clients=x] [--max-throttle=x] [--throttling-time=x]\n"); 
-    parse_arguments(argc, argv); 
 
     define_socket(&socket_fd, &address, NULL); // cria o socket principal
     struct linger so_linger = {1, 0};
