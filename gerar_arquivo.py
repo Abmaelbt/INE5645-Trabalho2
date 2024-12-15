@@ -12,7 +12,7 @@ def generate_random_text_file(filename, size_in_kb):
 
     print(f"Arquivo '{filename}' criado com sucesso com {os.path.getsize(filename)} bytes.")
 
-output_file = "1MB.txt"
+output_file = "1.txt"
 size_in_kb = 1
 
 generate_random_text_file(output_file, size_in_kb)
