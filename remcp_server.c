@@ -123,6 +123,8 @@ void reset_request_count(int *request_count, struct pollfd *poolfd, message_t *m
 }
 
 
+
+
 int main(int argc, char const *argv[])
 {
     omp_set_nested(1); // ativa suporte a threads aninhadas no openmp
@@ -193,13 +195,13 @@ int main(int argc, char const *argv[])
             }
 
             // verificar se o limite de clientes foi atingido
-            if (client_count >= MAX_CLIENTS)
-            {
-                printf("conexao rejeitada: limite de clientes atingido.\n"); 
+            if (client_count >= MAX_CLIENTS){
+                printf("conexao rejeitada: limite de clientes atingido.\n");
+                char *error_msg = "SERVER_BUSY: Limite de clientes atingido.\n";
+                send(new_socket, error_msg, strlen(error_msg), 0);
                 close(new_socket);
             }
-            else
-            {
+            else{
                 client_count++;
                 printf("nova conexao aceita, socket fd: %d\n", new_socket); 
             }

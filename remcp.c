@@ -8,6 +8,9 @@
 #include "header.h"
 
 
+#define MAX_RETRIES 7
+#define RETRY_WAIT_TIME 5
+
 void parse_arguments(const char *arg, char **host, char **file_path)
 {
     char *colon = strchr(arg, ':');
@@ -45,6 +48,41 @@ int download_file(int socket_fd, message_t *message)
     }
 }
 
+int retry_connect(int *socket_fd, struct sockaddr_in *address, const char *host_server)
+{
+    int attempts = 0;
+    while (attempts < MAX_RETRIES)
+    {
+        printf("Tentativa de conexão (%d/%d)...\n", attempts + 1, MAX_RETRIES);
+        define_socket(socket_fd, address, (char *)host_server);
+
+        if (connect(*socket_fd, (struct sockaddr *)address, sizeof(*address)) == 0)
+        {
+            printf("Conexão estabelecida. Aguardando resposta do servidor...\n");
+            char buffer[256] = {0};
+            recv(*socket_fd, buffer, sizeof(buffer), 0);
+
+            if (strncmp(buffer, "SERVER_BUSY", 11) == 0)
+            {
+                printf("Servidor ocupado. Tentando novamente...\n");
+                close(*socket_fd);
+                sleep(RETRY_WAIT_TIME);
+                attempts++;
+                continue;
+            }
+            return 0; // Conexão bem-sucedida
+        }
+
+        perror("Falha ao conectar ao servidor. Tentando novamente...");
+        close(*socket_fd);
+        sleep(RETRY_WAIT_TIME);
+        attempts++;
+    }
+
+    fprintf(stderr, "Falha após %d tentativas. Não foi possível conectar ao servidor.\n", MAX_RETRIES);
+    return -1; // Falha após todas as tentativas
+}
+
 int main(int argc, char const *argv[])
 {
     if (argc < 3 || argc > 4)
@@ -66,23 +104,18 @@ int main(int argc, char const *argv[])
 
     // determinar se a operacao e um upload
     upload = strcmp(host_origin, "127.0.0.1") == 0;
-
     host_server = upload ? host_destination : host_origin;
 
     int socket_fd;
     struct sockaddr_in address;
 
-    // criar e configurar o socket
-    define_socket(&socket_fd, &address, host_server);
+    
 
-    // conexao
-    if (connect(socket_fd, (struct sockaddr *)&address, sizeof(address)) < 0)
+    // Tentativa de conexão com retry
+    if (retry_connect(&socket_fd, &address, host_server) != 0)
     {
-        perror("falha ao conectar ao servidor.");
-        exit(EXIT_FAILURE);
+        exit(EXIT_FAILURE); // Finaliza se não conseguir conectar
     }
-
-    printf("Conexão estabelecida com o servidor...\n");
 
     // aloca memoria para a estrutura de mensagem
     message_t *message = (message_t *)malloc(sizeof(message_t));

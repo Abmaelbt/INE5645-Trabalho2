@@ -218,7 +218,6 @@ int handle_receive_message(int socket_fd, char *buffer)
     return valread;
 }
 
-// file_controller.c
 
 int get_abs_path(char *file_path, char **abs_path)
 {
@@ -284,7 +283,7 @@ int handle_write_part_file(char *buffer, int valread, message_t *message)
     fprintf(file, "%s", buffer);
     fclose(file);
 
-    // verifica se o ultimo caractere do buffer e o marcador de eof
+    // verifica se o ultimo caractere do buffer eh o marcador de eof
     if (buffer[valread - 1] == EOF_MARKER)
     {
         FILE *file = fopen(file_path_with_part, "r+");
